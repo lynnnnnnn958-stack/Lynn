@@ -1,0 +1,65 @@
+# Canyon Quant — Central Configuration
+# All magic numbers live here. Import with:
+#   import yaml
+#   CFG = yaml.safe_load(open("config.yaml"))
+
+backtest:
+  hold_days: 21           # holding period in trading days
+  beta_window: 252        # days for beta estimation
+  oos_months: 22          # walk-forward out-of-sample months
+  ic_lookback_months: 12  # months used to compute rolling IC
+  warmup_days: 273        # min days before first backtest date
+  top_n: 25               # max stocks in portfolio each side
+
+risk:
+  max_position_pct: 0.08   # max single-name weight (long or short)
+  beta_tolerance: 0.10     # max |portfolio beta|
+  sector_cap: 0.10         # max net sector exposure
+  short_borrow_ann: 0.02   # 2% annualized borrow cost on short book
+  high_vol_thresh: 0.25    # SPY/VIX realized vol trigger (annualized)
+  high_vol_scalar: 0.70    # reduce max_w to 70% in high-vol regime
+  risk_aversion: 1.5       # MVO lambda (obj = alpha - lambda * variance)
+
+signals:
+  winsorize_pct: 0.01      # 1% / 99% winsorization
+  neutralize: true         # sector-neutralize before combining
+  # IC fallback values for v9 signals (used when rolling IC unavailable)
+  ic_fallback:
+    sig_ml_ensemble: 0.370
+    sig_surprise:    0.229
+    sig_regime_ml:   0.223
+    sig_quality:     0.048
+    sig_squeeze:     0.050
+    sig_revision:    0.038
+    sig_insider:     0.004
+    sig_options:     0.017
+    sig_sentiment:   0.010
+
+data:
+  price_cache:   "sp500_price_cache.csv"
+  alpha_scores:  "alpha_scores.csv"
+  fred_macro:    "fred_macro_daily.csv"
+  edgar_pit_eps: "edgar_pit_eps.csv"
+  edgar_pit_fundamentals: "edgar_pit_fundamentals.csv"
+  edgar_form4:   "edgar_form4_cache.csv"
+  polygon_ivr:   "polygon_ivr_cache.csv"
+  fred_api_key:  ""   # FRED is free, no key needed for pandas_datareader
+  polygon_api_key_env: "POLYGON_API_KEY"  # env var name
+
+execution:
+  max_adv_participation: 0.05   # max 5% of ADV per position
+  twap_duration_min: 20         # TWAP slice duration in minutes
+  alpaca_paper_url: "https://paper-api.alpaca.markets"
+  alpaca_key_env:   "ALPACA_PAPER_KEY"
+  alpaca_secret_env: "ALPACA_PAPER_SECRET"
+
+monitoring:
+  email_to: "lynnnnnnn958@gmail.com"
+  slippage_warn_ratio: 1.5   # alert if actual slippage > 1.5× model
+  ic_min_tstat: 1.5          # warn if signal IC t-stat < 1.5
+  stale_data_days: 2         # alert if price data older than 2 days
+
+logging:
+  level: "INFO"
+  format: "json"   # structured JSON logs for monitoring
+  dir: "daily_runs"

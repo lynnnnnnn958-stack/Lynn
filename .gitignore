@@ -1,0 +1,62 @@
+# ─────────────────────────────────────────────────────────────
+# Canyon Quant — commit source only. Everything the pipeline
+# downloads or generates (run_daily.py fetches prices/news/macro
+# fresh each run) stays out of git.
+# ─────────────────────────────────────────────────────────────
+
+# Secrets / credentials
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.cached_*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# OS junk
+.DS_Store
+
+# ── Generated output & caches (regenerated every run) ──
+canyon_output_vault/
+daily_runs/
+daily_reports/
+revision_cache/
+sec_filings_cache/
+nlp_cache/
+model_cache/
+finbert_model_cache/
+logs/
+
+# ── Downloaded / generated data & artifacts ──
+*.csv
+*.parquet
+*.pkl
+*.duckdb
+*.safetensors
+*.zip
+*.dmg
+*.docx
+*.png
+*.json
+*.html
+*.md
+*.log
+*.jsonl
+*.pid
+*.err
+*.txt
+
+# Backups / recovered / corrupt scratch files
+*.bak*
+*.corrupt*
+*.recovered_*
+*_bak_*
+
+# ── Keep source docs & config (re-include after broad ignores) ──
+!config.yaml
+!docs/**
+!.gitignore
