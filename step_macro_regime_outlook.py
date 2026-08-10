@@ -415,6 +415,41 @@ def main():
     print(f"  Composite Bear Probability (4-week outlook): {composite['bear_prob']:.1f}%  [{composite['label']}]")
     print()
 
+    # ── Week-over-week delta from a small history log ────────────────────────
+    # Lets the dashboard show a ▲/▼ arrow so a slow-moving gauge still reads as
+    # "moving" (Lynn: "这个13怎么从来没有变过"). History builds over daily runs.
+    HIST = ROOT / "macro_regime_outlook_history.csv"
+    today = ts[:10]  # ts is "YYYY-MM-DD HH:MM"
+    try:
+        import csv as _csv
+        rows = []
+        if HIST.exists():
+            with open(HIST) as f:
+                rows = [r for r in _csv.reader(f) if len(r) == 2 and r[0] != "date"]
+        # de-dup today, keep last ~400 days
+        rows = [r for r in rows if r[0] != today][-400:]
+        prev_val = None
+        # nearest entry that is >= ~5 calendar days old (≈1 trading week)
+        from datetime import date as _date
+        def _age(ds):
+            try:
+                y, m, d = map(int, ds.split("-")); return (_date.today() - _date(y, m, d)).days
+            except Exception:
+                return -1
+        older = [r for r in rows if _age(r[0]) >= 5]
+        if older:
+            prev_val = float(older[-1][1])
+        elif rows:
+            prev_val = float(rows[0][1])  # fallback: earliest available
+        if prev_val is not None:
+            composite["bear_prob_prev"] = round(prev_val, 1)
+            composite["bear_prob_delta"] = round(composite["bear_prob"] - prev_val, 1)
+        rows.append([today, f'{composite["bear_prob"]:.1f}'])
+        with open(HIST, "w", newline="") as f:
+            w = _csv.writer(f); w.writerow(["date", "bear_prob"]); w.writerows(rows)
+    except Exception as _e:
+        print(f"  (history log skipped: {_e})")
+
     result = {
         "as_of":     ts,
         "signals":   signals,

@@ -212,7 +212,7 @@ def tqqq_period_ret_with_cc(t, ew):
 
     # Price the option using realized vol from before this period
     sigma = tqqq_realized_vol(t)
-sigma = max(sigma, 0.40)  # TQQQ minimum vol floor
+    sigma = max(sigma, 0.40)  # TQQQ minimum vol floor
     prem  = bs_call_premium(sigma)   # premium / TQQQ price
 
     # Track intra-period path + trailing stop
@@ -529,7 +529,7 @@ print(f"     Stop-loss periods (premium kept): {df_full['stopped'].sum()} / {len
 
 # SUE effect (if enabled)
 if sue_data is not None:
-print(f"\n  ── SUE signal status")
+    print(f"\n  ── SUE signal status")
     print(f"     Earnings data: {len(sue_data)} rows  {sue_data['ticker'].nunique()} stocks")
     print(f"     SUE weight: {SUE_WEIGHT:.0%} (replaces part of momentum weight)")
 

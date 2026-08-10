@@ -70,7 +70,7 @@ VOL_WIN      = 21            # 21-day volatility
 def load_prices() -> pd.DataFrame:
     path = ROOT / "sp500_price_cache.csv"
     if not path.exists():
-raise FileNotFoundError("sp500_price_cache.csv not found")
+        raise FileNotFoundError("sp500_price_cache.csv not found")
     px = pd.read_csv(path, index_col=0, parse_dates=True).sort_index()
     return px.dropna(axis=1, how="all")
 
@@ -238,7 +238,7 @@ def run_backtest(
 
     rebal_dates = get_monthly_rebal_dates(prices, period_start, period_end)
     if len(rebal_dates) < 2:
-print(f"  [skip] fewer than 2 months")
+        print(f"  [skip] fewer than 2 months")
         return pd.DataFrame()
 
     rows = []
@@ -281,7 +281,7 @@ print(f"  [skip] fewer than 2 months")
         prev_tickers = top_tickers
 
     if not rows:
-print(f"  [skip] no valid data (possibly insufficient warm-up)")
+        print(f"  [skip] no valid data (possibly insufficient warm-up)")
         return pd.DataFrame()
 
     df = pd.DataFrame(rows).set_index("date")
@@ -437,11 +437,11 @@ f"**Performance decay**: {degradation*100:.0f}%",
     ]
 
     if degradation < 0.30:
-lines.append("✅ **Performance decay < 30%** — Good generalization; training and test results are close.")
+        lines.append("✅ **Performance decay < 30%** — Good generalization; training and test results are close.")
     elif degradation < 0.60:
-lines.append("⚠ **Performance decay 30-60%** — Partial overfitting; test set still has excess return but weaker.")
+        lines.append("⚠ **Performance decay 30-60%** — Partial overfitting; test set still has excess return but weaker.")
     else:
-lines.append("🔴 **Performance decay > 60%** — Severe overfitting. Training results unreliable; signals need redesign.")
+        lines.append("🔴 **Performance decay > 60%** — Severe overfitting. Training results unreliable; signals need redesign.")
 
     lines += [
         "",

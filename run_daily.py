@@ -14,7 +14,7 @@ Order of operations:
   4. Step 500 pipeline          — live signal snapshot + paper trading log
   5. P&L attribution (step 96) — updates attribution tables
   6. Daily alerts (step 98)    — generates desk monitor alerts
-  7. Research HTML              — rebuilds canyon_v9_research.html
+  7. Research HTML              — rebuilds canyon_v24_research.html
   8. Email summary              — sends daily briefing email (if configured)
 
 Principles:
@@ -51,7 +51,14 @@ except Exception:
     _cfg = {}
 
 ROOT   = Path(__file__).parent
-PYTHON = ROOT / ".venv" / "bin" / "python"
+# The project's .venv lives on the iCloud-synced Desktop; macOS evicts its files
+# to iCloud ("dataless") under storage pressure, so every venv import can hang or
+# time out (Errno 60) waiting on an iCloud download — which stalls the whole
+# pipeline. Prefer the system framework Python (/Library, never iCloud-managed)
+# so automation is iCloud-proof; fall back to the venv only if it's absent.
+_FRAMEWORK_PY = Path("/Library/Frameworks/Python.framework/Versions/3.14/bin/python3")
+_VENV_PY      = ROOT / ".venv" / "bin" / "python"
+PYTHON = _FRAMEWORK_PY if _FRAMEWORK_PY.exists() else _VENV_PY
 LOGDIR = ROOT / (_cfg.get("logging", {}).get("dir", "daily_runs"))
 LOGDIR.mkdir(exist_ok=True)
 
@@ -72,8 +79,9 @@ STEPS = [
     # critical=False → skipped silently if script missing
     # timeout_sec    → None means use TIMEOUT_DEFAULT
     ("Step 0  — Price & signals",  "step_daily_price_signals.py",                 True,  900),
-    ("Step 99 — News",             "canyon_final_v9_step99_news_aggregator.py",   False, 300),
-    ("Step 79 — FinBERT sentiment","canyon_final_v9_step79_finbert_sentiment.py", False, 600),
+    ("Step 99 — News (S&P500全覆盖)", "canyon_final_v9_step99_news_aggregator.py", False, 300,
+     ["--source", "alpha", "--top", "500", "--workers", "12"]),
+    ("Step 79 — FinBERT sentiment","canyon_final_v9_step79_finbert_sentiment.py", False, 1500),  # ML 模型推理慢, 600s 不够 → 给 25min 余量 (2026-08-04)
     ("Step 80 — SEC MD&A NLP",    "canyon_final_v9_step80_sec_mda_nlp.py",       False, 3600),
     ("Step 81 — Earnings 8-K NLP","canyon_final_v9_step81_earnings_nlp.py",      False, 2400),
     ("Step 81b— PEAD/SUE signal", "canyon_final_v9_step81_earnings_surprise.py",  False, 600),
@@ -96,7 +104,9 @@ STEPS = [
     ("Step 377 — 8-K NLP",      "step_earnings_8k_nlp.py",                      False, 1200),
     ("Step 378 — FRED Data",    "step_fred_data.py",                             False, 120),
     ("Step 379 — Social Senti", "step_social_sentiment.py",                      False, 180),
-    ("Step 102— Earnings cal",    "canyon_final_v9_step102_earnings_calendar.py", False, 300),
+    ("Step 379b— AlphaVantage News", "step_alphavantage.py",                     False, 60),
+    ("Step 102— Earnings cal (S&P500)", "canyon_final_v9_step102_earnings_calendar.py", False, 300,
+     ["--top", "500"]),
     ("Step 250 — Alt data IC",    "canyon_final_v9_step250_alt_data.py",          False, 600),
     ("Inst   — Layer upgrades",    "step_institutional_upgrades.py",              False, 1800),
     ("Step 12 — Core pipeline",   "canyon_final_v9_step12_daily_runner.py",       True,  1800),
@@ -133,6 +143,51 @@ STEPS = [
     ("Step 120— Inst upgrade mstr","canyon_final_v9_step120_institutional_upgrade_master.py", False, 600),
     ("Step 172— Inst depth engine","canyon_final_v9_step172_institutional_depth_upgrade_engine.py", False, 600),
     ("Step TCA— Execution depth", "canyon_execution_tca_depth.py",                        False, 300),
+    # ── Re-added 2026-08-04: 4 producers whose dashboard panels had gone ~14d
+    #    stale (they were absent from the pipeline). All non-critical + bootstrap
+    #    socket-timeout protected, so a slow/failed run can't harm the pipeline;
+    #    generous timeouts because they crunch history CSVs. tc_verify verified
+    #    ~1s; the other 3 could not be timed cleanly in a loaded sandbox but run
+    #    fine on the unstressed 6am cron. ──
+    ("Step ICA— IC audit report", "step_ic_audit.py",                                     False, 600),
+    ("Step TCV— TC verification", "step_tc_verify.py",                                     False, 180),
+    ("Step FCM— Factor corr/VIF", "step_factor_correlation.py",                            False, 600),
+    ("Step STR— Stress test",     "step_stress_test.py",                                   False, 600),
+    # Re-added producers that were runnable but missing from the daily pipeline.
+    ("Step 5yr— 5-year backtest", "canyon_v9_clean_5yr_backtest.py",                      False, 600),
+    ("Step HM — Heatmap data",   "step_heatmap_data.py",                                  False, 120),
+    ("Step 490— Short squeeze",  "canyon_final_v9_step490_short_squeeze.py",              False, 300),
+    ("Step OF — Options flow",   "step_options_flow.py",                                  False, 120),
+    ("Step EF — ETF flow",       "step_etf_flow_rt.py",                                   False, 120),
+    # Revive 6 orphaned dashboard panels (producers were lost from the repo).
+    # Rebuilds paper NAV, live IC, risk gate, desk monitor, event dossier,
+    # action readiness from live data. Must run after weights/picks/alpha history.
+    ("Revive — Orphaned panels", "step_revive_panels.py",                                 False, 300),
+    # 事件驱动主动投资系统 (手册) — 底库永远是标普500
+    ("EDGAR — SEC 8-K/Form4事件流", "canyon_edgar_events.py",                              False, 300),
+    ("COT   — CFTC商品持仓信号",   "canyon_cftc_cot.py",                                   False, 180),
+    ("Macro — 第1层情报评分卡",  "canyon_macro_intel.py",                                 False, 120),
+    ("Rotate— 行业板块轮动信号",  "canyon_sector_rotation.py",                             False, 120),
+    ("ETF   — 板块龙头ETF指标",   "canyon_sector_etf.py",                                  False, 120),
+    ("Detect— 第3层事件自动侦测", "canyon_event_detect.py",                                False, 120),
+    ("Life  — 第2层生命周期风格", "canyon_lifecycle.py",                                   False, 120),
+    ("Pool  — 建池(标普500底库)", "canyon_build_pool.py",                                  False, 120),
+    ("Event — 利润发动机引擎",   "canyon_event_system.py",                                False, 120),
+    ("Layer4— 功能池自动分层",   "canyon_pools.py",                                       False, 120),
+    ("Size  — 第6层仓位构建风控", "canyon_position_sizing.py",                             False, 120),
+    ("TCA   — 执行成本建模",     "canyon_execution_costs.py",                             False, 120),
+    ("Intra — 日内感知层",       "canyon_intraday.py",                                    False, 180),
+    ("PosMgr— 持仓管理/退出",     "canyon_position_manager.py",                            False, 120),
+    ("Review— 周月季复盘节奏",   "canyon_review.py",                                      False, 120),
+    ("Valid — 事件打分IC验证",   "canyon_event_validate.py",                              False, 180),
+    ("EventBT—8-K事件研究验证",   "canyon_edgar_backtest.py",                              False, 300),
+    # Deep price history (incremental) + PIT membership + credible bias-controlled backtest
+    ("Deep  — Price history",    "step_extend_price_history.py",                          False, 900),
+    ("PIT   — S&P membership",   "step_sp500_pit_membership.py",                          False, 120),
+    ("Rigor — Honest backtest",  "step_rigorous_backtest.py",                             False, 600),
+    # First real-edge research: EDGAR point-in-time EPS + PEAD validation
+    ("EDGAR — PIT quarterly EPS","step_edgar_eps_pit.py",                                 False, 600),
+    ("PEAD  — Earnings drift",   "step_pead_strategy.py",                                 False, 300),
     ("Step 98 — Daily alerts",    "canyon_final_v9_step98_daily_alerts.py",       False, 600),
     ("Data   — Parquet sync",     "canyon_data_layer.py",                         False, 120),
     ("HTML — Research page",      "update_research_html.py",                      True,  600),
@@ -159,7 +214,8 @@ def _log(msg: str, level: str = "INFO", step: str = "", elapsed: float = 0.0):
         fj.write(json.dumps(record) + "\n")
 
 
-def run_step(label: str, script: str, critical: bool, timeout_sec: int = None) -> bool:
+def run_step(label: str, script: str, critical: bool, timeout_sec: int = None, args: list = None,
+             retries: int = 1) -> bool:
     path = ROOT / script
     if not path.exists():
         if critical:
@@ -169,39 +225,46 @@ def run_step(label: str, script: str, critical: bool, timeout_sec: int = None) -
         return True
 
     _log(f"{CYAN}START {BOLD}{label}{RESET}")
-    t0 = time.time()
     timeout = timeout_sec if timeout_sec is not None else TIMEOUT_DEFAULT
     import os as _os
     env = _os.environ.copy()
-    env['RUN_DAILY_ACTIVE'] = '1'   # signals sub-scripts not to re-invoke the pipeline
-    try:
-        result = subprocess.run(
-            [str(PYTHON), str(path)],
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
-        elapsed = time.time() - t0
-        if result.returncode == 0:
-            _log(f"{GREEN}  OK  {label}  ({elapsed:.1f}s){RESET}")
-            # Log last 3 lines of output for visibility
-            lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
-            for ln in lines[-3:]:
-                _log(f"       {ln}")
-            return True
+    env['RUN_DAILY_ACTIVE'] = '1'          # signals sub-scripts not to re-invoke the pipeline
+    env.setdefault('HF_HUB_OFFLINE', '1')  # transformers/HF 不联网, 防 import 超时(FinBERT)
+    env.setdefault('TRANSFORMERS_OFFLINE', '1')
+    last_err, err_lines = "", []
+    # 失败自动重试 (retries 次): 大多数失败是网络限流/超时, 重试即恢复
+    for attempt in range(retries + 1):
+        t0 = time.time()
+        try:
+            result = subprocess.run(
+                # via _canyon_run.py bootstrap: installs a default socket timeout
+                # so a hung network read fails fast instead of eating the whole
+                # per-step timeout (root cause of the "6 偶发失败" steps).
+                [str(PYTHON), str(ROOT / "_canyon_run.py"), str(path)] + (args or []),
+                cwd=str(ROOT), capture_output=True, text=True, timeout=timeout, env=env,
+            )
+            elapsed = time.time() - t0
+            if result.returncode == 0:
+                tag = f"{GREEN}  OK  {label}  ({elapsed:.1f}s{'·重试成功' if attempt else ''}){RESET}"
+                _log(tag)
+                for ln in [l.strip() for l in result.stdout.strip().splitlines() if l.strip()][-3:]:
+                    _log(f"       {ln}")
+                return True
+            last_err = f"rc={result.returncode}"
+            err_lines = (result.stderr or result.stdout or "").strip().splitlines()[-3:]
+        except subprocess.TimeoutExpired:
+            last_err = f"超时 >{timeout}s"; elapsed = time.time() - t0; err_lines = []
+        except Exception as e:
+            last_err = str(e); elapsed = time.time() - t0; err_lines = []
+        if attempt < retries:
+            _log(f"{YELLOW}  RETRY {label} (第{attempt+1}次失败: {last_err}, 5秒后重试){RESET}")
+            time.sleep(5)
         else:
-            _log(f"{RED}  ERR {label}  ({elapsed:.1f}s)  rc={result.returncode}{RESET}")
-            for ln in (result.stderr or result.stdout or "").strip().splitlines()[-5:]:
+            _log(f"{RED}  ERR {label}  ({elapsed:.1f}s)  {last_err}{RESET}")
+            for ln in err_lines:
                 _log(f"       {ln.strip()}")
             return False
-    except subprocess.TimeoutExpired:
-        _log(f"{RED}  TIMEOUT {label}  (>{timeout}s){RESET}")
-        return False
-    except Exception as e:
-        _log(f"{RED}  EXCEPTION {label}: {e}{RESET}")
-        return False
+    return False
 
 
 def preflight_check() -> list[str]:
@@ -275,7 +338,8 @@ def main():
 
     for label, script, critical, *rest in STEPS:
         timeout_sec = rest[0] if rest else None
-        ok = run_step(label, script, critical, timeout_sec)
+        step_args = rest[1] if len(rest) > 1 else None
+        ok = run_step(label, script, critical, timeout_sec, step_args)
         results.append((label, ok))
         _log("")
 
@@ -315,12 +379,33 @@ def main():
         icon = f"{GREEN}✓{RESET}" if ok else f"{RED}✗{RESET}"
         _log(f"  {icon}  {label}")
     _log("")
+    # ── Failure alert: write a machine-readable alert the dashboard surfaces ──
+    _alert_path = ROOT / "pipeline_alert.json"
+    failed_labels = [label for label, ok in results if not ok]
+    try:
+        if failed == 0:
+            alert = {"status": "ok", "ts": datetime.now().isoformat(timespec="seconds"),
+                     "passed": passed, "failed": 0, "failed_steps": []}
+        else:
+            alert = {"status": "alert", "ts": datetime.now().isoformat(timespec="seconds"),
+                     "passed": passed, "failed": failed, "failed_steps": failed_labels}
+        json.dump(alert, open(_alert_path, "w"), indent=2)
+    except Exception:
+        pass
+
     if failed == 0:
         _log(f"{GREEN}{BOLD}  All {passed} steps completed.{RESET}")
     else:
-        _log(f"{YELLOW}{BOLD}  {passed} passed · {failed} failed — check log: {LOG_FILE}{RESET}")
+        _log(f"{RED}{BOLD}  ⚠ {passed} passed · {failed} FAILED: {', '.join(failed_labels[:6])}{RESET}")
+        _log(f"{YELLOW}  Alert written to pipeline_alert.json — check log: {LOG_FILE}{RESET}")
+        # optional desktop push if step_push_alerts supports it
+        try:
+            subprocess.run([str(PYTHON), str(ROOT / "step_push_alerts.py"), "--pipeline-failure"],
+                           cwd=str(ROOT), timeout=30, capture_output=True)
+        except Exception:
+            pass
     _log("")
-    _log(f"  Research page:  file://{ROOT / 'canyon_v9_research.html'}")
+    _log(f"  Research page:  file://{ROOT / 'canyon_v24_research.html'}")
     _log(f"  Dynamic server: http://localhost:8513  (if serve_research.py is running)")
     _log("")
 

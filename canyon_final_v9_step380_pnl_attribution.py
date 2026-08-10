@@ -76,13 +76,19 @@ BETA_WINDOW = 21            # days for rolling beta
 # =============================================================================
 
 def load_all() -> tuple[pd.DataFrame, pd.DataFrame]:
-    for fname in ("cpcv_predictions.csv", "wf_oos_predictions.csv"):
+    # P&L reconstruction needs a HISTORICAL panel (many rebalance dates), not a
+    # single-day cross-section. cpcv_predictions.csv is a 1-date daily snapshot;
+    # wf_oos_predictions.csv is the multi-year panel. Prefer whichever has the
+    # most rebalance dates so we never fall back to a single-snapshot file.
+    preds = pd.DataFrame()
+    best_dates = 0
+    for fname in ("wf_oos_predictions.csv", "cpcv_predictions.csv"):
         p = ROOT / fname
         if p.exists():
-            preds = pd.read_csv(p, parse_dates=["rebalance_date"])
-            break
-    else:
-        preds = pd.DataFrame()
+            df = pd.read_csv(p, parse_dates=["rebalance_date"])
+            ndates = df["rebalance_date"].nunique() if "rebalance_date" in df.columns else 0
+            if ndates > best_dates:
+                preds, best_dates = df, ndates
 
     prices = pd.read_csv(ROOT / "backtest_price_cache.csv",
                          index_col=0, parse_dates=True)

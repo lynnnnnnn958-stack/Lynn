@@ -285,6 +285,9 @@ def load_ticker_universe(top_n: int) -> tuple[list[str], dict[str, dict]]:
 
     _ingest(picks_df,  "daily_picks", in_portfolio=False)
     _ingest(final_df,  "daily_final", in_portfolio=True)
+    # 事件系统底库=标普500全体: 并入 alpha_scores.csv, 让 N(催化临近度) 覆盖全池
+    alpha_df = _load_csv(ROOT / "alpha_scores.csv", "alpha_scores")
+    _ingest(alpha_df, "alpha_scores", in_portfolio=False)
 
     # Sort by alpha_score descending (unknown alpha goes to end)
     sorted_tickers = sorted(

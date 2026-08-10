@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Canyon v9 — Research Website Generator
-Reads live CSVs and daily report, generates canyon_v9_research.html.
+Reads live CSVs and daily report, generates canyon_v24_research.html.
 Run daily:  .venv/bin/python update_research_html.py
 """
 from __future__ import annotations
@@ -222,12 +222,16 @@ def load_live_data() -> dict:
     out = {"positions": [], "ic_rows": [], "ic_status": "", "days_acc": 0}
 
     # Paper trading log — show only the most recent day's positions
+    # (skip if the book is stale >30 days: a frozen legacy snapshot is worse than empty)
     p = ROOT / "paper_trading_log.csv"
     if p.exists():
         df = pd.read_csv(p)
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        # 修复日期解析: 首行带时间戳会让 pandas 按单一格式推断, 后续纯日期行全变 NaT。
+        # 先截取前10位(YYYY-MM-DD)再解析, 保证全部 142 行都被识别。
+        df["date"] = pd.to_datetime(df["date"].astype(str).str.slice(0, 10), errors="coerce")
         df = df.dropna(subset=["date"]).sort_values("date")
-        if not df.empty:
+        _fresh = (not df.empty) and (pd.Timestamp.now() - df.iloc[-1]["date"]).days <= 30
+        if _fresh:
             r = df.iloc[-1]   # latest row only
             longs  = str(r.get("long_stocks",  "")).split("|") if pd.notna(r.get("long_stocks"))  else []
             shorts = str(r.get("short_stocks", "")).split("|") if pd.notna(r.get("short_stocks")) else []
@@ -457,7 +461,7 @@ def load_sector_cycle() -> list:
 def load_news() -> list:
     """Load stock news from stock_news.json + catalysts from event_research_dossier.csv."""
     TONE_LABEL  = {"POSITIVE": "Bullish signal", "NEGATIVE": "Bearish signal", "NEUTRAL": "No clear direction"}
-    TONE_COLOR  = {"POSITIVE": "#1B6F4A", "NEGATIVE": "#B83232", "NEUTRAL": "#B8943F"}
+    TONE_COLOR  = {"POSITIVE": "#1B6F4A", "NEGATIVE": "#B83232", "NEUTRAL": "#c8b487"}
     TONE_CLASS  = {"POSITIVE": "pos", "NEGATIVE": "neg", "NEUTRAL": "neu"}
     items = []
     p = ROOT / "stock_news.json"
@@ -488,7 +492,7 @@ def load_news() -> list:
                     "bullish_reasons": item.get("bullish_reasons", []),
                     "bearish_reasons": item.get("bearish_reasons", []),
                     "tone": TONE_LABEL.get(tone, "No clear direction"),
-                    "tone_color": TONE_COLOR.get(tone, "#B8943F"),
+                    "tone_color": TONE_COLOR.get(tone, "#c8b487"),
                     "tone_class": TONE_CLASS.get(tone, "neu"),
                     "logic": item.get("news_logic", ""),
                     "action_hint": action_clean,
@@ -1117,12 +1121,101 @@ def load_barra_risk() -> dict:
     return result
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# FT dark-panel design system — shared by all rewritten "core" panels so they
+# match the new _fred_macro_panel / _pead_panel / _pnl_contrib_panel look:
+# warm near-black card, salmon accent, serif tabular figures, uppercase eyebrow.
+# ═══════════════════════════════════════════════════════════════════════════
+FT = {
+    "card": "#16140f", "inner": "#100e0a", "border": "#33301f", "border2": "#26241a",
+    "ink": "#f0e9da", "mute": "#8f866f", "sub": "#b0a68f", "accent": "#c8b487",
+    "pos": "#8faa9a", "neg": "#c68b83", "warn": "#cdbd8f", "faint": "#79715f",
+    "serif": "'Baskerville','Hoefler Text','Iowan Old Style','Georgia',serif",
+}
+
+
+def _safe_panel(fn, *args, **kw) -> str:
+    """Call a panel builder; on any error return a small dark placeholder instead
+    of letting one panel crash the whole page f-string. Used for rewritten panels."""
+    try:
+        return fn(*args, **kw)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return (f'<div style="margin-bottom:26px;background:#16140f;border:1px solid #3a3128;'
+                f'border-radius:8px;padding:16px 18px;color:#8a7f70;font-size:12px">'
+                f'⚠ This panel failed to render (skipped; the rest of the page is unaffected): {type(e).__name__}</div>')
+
+
+def _ft_open(eyebrow: str, meta: str = "", mb: int = 26) -> str:
+    """Open an FT *editorial* dark card: small salmon kicker + big serif headline
+    + hairline rule (the Financial Times masthead feel). Titles passed as
+    "CATEGORY · Headline" split into kicker + serif headline."""
+    if " · " in eyebrow:
+        kicker, headline = eyebrow.split(" · ", 1)
+    else:
+        kicker, headline = "", eyebrow
+    kicker_html = (f'<div style="font-size:10px;color:{FT["accent"]};text-transform:uppercase;'
+                   f'letter-spacing:.18em;font-weight:400;margin-bottom:6px">{kicker}</div>' if kicker else "")
+    return (f'<div style="margin-bottom:{mb}px;background:{FT["card"]};border:1px solid {FT["border"]};'
+            f'border-radius:8px;padding:20px 24px;box-shadow:0 1px 3px rgba(0,0,0,.4)">'
+            f'<div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:12px">'
+            f'<div>{kicker_html}<h3 style="font-family:{FT["serif"]};font-size:23px;font-weight:500;'
+            f'color:{FT["ink"]};margin:0;line-height:1.12;letter-spacing:-.015em">{headline}</h3></div>'
+            f'<span style="font-size:11px;color:{FT["mute"]};white-space:nowrap;padding-bottom:5px">{meta}</span></div>'
+            f'<div style="height:2px;width:40px;background:{FT["accent"]};border-radius:1px;margin-bottom:16px"></div>')
+
+
+def _ft_close(foot: str = "") -> str:
+    f = f'<p style="color:{FT["faint"]};font-size:10.5px;margin-top:10px">{foot}</p>' if foot else ""
+    return f + '</div>'
+
+
+def _ft_stat(label: str, value, sub: str = "", color: str = None) -> str:
+    """A single inner stat cell — serif tabular figure on the inner surface."""
+    color = color or FT["ink"]
+    return (f'<div style="padding:10px 14px;border:1px solid {FT["border2"]};border-radius:6px;background:{FT["inner"]}">'
+            f'<div style="font-size:9.5px;color:{FT["mute"]};text-transform:uppercase;letter-spacing:.08em;line-height:1.25;min-height:22px">{label}</div>'
+            f'<div style="font-size:20px;font-weight:400;color:{color};font-family:{FT["serif"]};font-variant-numeric:tabular-nums;margin-top:3px">{value}</div>'
+            + (f'<div style="font-size:10px;color:{FT["sub"]};margin-top:2px">{sub}</div>' if sub else "")
+            + '</div>')
+
+
+def _ft_statgrid(cells: list, minw: int = 150) -> str:
+    return (f'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax({minw}px,1fr));gap:12px;margin-bottom:14px">'
+            + "".join(cells) + '</div>')
+
+
+def _ft_subhead(text: str) -> str:
+    return (f'<div style="font-size:10px;color:{FT["accent"]};text-transform:uppercase;letter-spacing:.12em;'
+            f'margin:6px 0 8px">{text}</div>')
+
+
+def _ft_table(headers: list, rows_html: str, empty: str = "No data", minw: int = 0) -> str:
+    """A dark FT table. `headers`: list of (label, align). rows_html: pre-built <tr>s."""
+    ths = "".join(
+        f'<th style="text-align:{a};padding:7px 12px;font-size:9.5px;text-transform:uppercase;'
+        f'letter-spacing:.08em;color:{FT["mute"]};border-bottom:1px solid #453a2c">{h}</th>'
+        for h, a in headers)
+    body = rows_html or (f'<tr><td colspan="{len(headers)}" style="padding:10px 12px;color:{FT["faint"]}">{empty}</td></tr>')
+    mw = f"min-width:{minw}px;" if minw else ""
+    return (f'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;{mw}font-size:12.5px">'
+            f'<thead><tr>{ths}</tr></thead><tbody>{body}</tbody></table></div>')
+
+
+def _ft_td(val, align: str = "left", color: str = None, bold: bool = False) -> str:
+    c = f"color:{color};" if color else ""
+    w = "font-weight:400;" if bold else ""
+    num = "font-variant-numeric:tabular-nums;" if align == "right" else ""
+    return f'<td style="padding:6px 12px;text-align:{align};{c}{w}{num}border-bottom:1px solid #2a231b">{val}</td>'
+
+
 def _build_barra_risk_panel(br: dict) -> str:
     """Render the Barra factor risk decomposition panel for the Risk tab."""
     if not br or not br.get("decomp"):
         return "<p style='color:#999;font-style:italic'>Factor risk model not yet run (execute step88 first).</p>"
 
-    d = br["decomp"]
+    d0 = br["decomp"]  # keep a stable ref — the regime loop below reuses `d` as a float
 
     def _pct(v):
         try: return f"{float(v):.1%}"
@@ -1133,12 +1226,12 @@ def _build_barra_risk_panel(br: dict) -> str:
         except: return "—"
 
     # Factor share bar
-    fshare = float(d.get("factor_share", 0))
-    sshare = float(d.get("specific_share", 0))
+    fshare = float(d0.get("factor_share", 0))
+    sshare = float(d0.get("specific_share", 0))
     fshare_pct = round(fshare * 100)
     sshare_pct = 100 - fshare_pct
 
-    share_color = "#e74c3c" if fshare > 0.65 else "#1B6F4A" if fshare < 0.50 else "#f39c12"
+    share_color = FT["neg"] if fshare > 0.65 else FT["pos"] if fshare < 0.50 else FT["warn"]
     share_note  = ("⚠ High factor share — book tilted toward systematic risk"
                    if fshare > 0.65 else
                    "✓ Healthy split — sufficient stock-specific alpha"
@@ -1148,8 +1241,8 @@ def _build_barra_risk_panel(br: dict) -> str:
     # Factor volatility table
     fv_rows = ""
     for row in br.get("factor_cov_diag", []):
-        fv_rows += (f"<tr><td>{row['factor']}</td>"
-                    f"<td class='r'>{row['annual_vol']:.2%}</td></tr>")
+        fv_rows += ("<tr>" + _ft_td(row['factor'])
+                    + _ft_td(f"{row['annual_vol']:.2%}", "right") + "</tr>")
 
     # Factor neutralization table
     fn = br.get("neutralization", {})
@@ -1161,43 +1254,44 @@ def _build_barra_risk_panel(br: dict) -> str:
             pre_f  = float(pre);  pre_s  = f"{pre_f:+.3f}"
             post_f = float(post); post_s = f"{post_f:+.3f}"
             arrow  = "✓" if abs(post_f) < abs(pre_f) else "~"
-            color  = "#1B6F4A" if abs(post_f) <= 0.25 else "#e74c3c"
+            color  = FT["pos"] if abs(post_f) <= 0.25 else FT["neg"]
         except:
-            pre_s = post_s = "—"; arrow = ""; color = "#999"
-        fn_rows += (f"<tr><td>{f}</td><td class='r'>{pre_s}</td>"
-                    f"<td class='r' style='color:{color}'>{post_s}</td>"
-                    f"<td class='r'>{arrow}</td></tr>")
+            pre_s = post_s = "—"; arrow = ""; color = FT["faint"]
+        fn_rows += ("<tr>" + _ft_td(f) + _ft_td(pre_s, "right")
+                    + _ft_td(post_s, "right", color) + _ft_td(arrow, "right") + "</tr>")
     n_swaps = fn.get("n_swaps", "—")
 
     # Regime conditioning card
     regime     = br.get("regime", "—")
     vix_bucket = br.get("vix_bucket", "—")
     reg_label  = f"{regime} / VIX {vix_bucket}"
-    reg_color  = ("#1B6F4A" if regime == "BULL" and vix_bucket == "LOW"
-                  else "#e74c3c" if regime == "BEAR" and vix_bucket == "HIGH"
-                  else "#f39c12")
+    reg_color  = (FT["pos"] if regime == "BULL" and vix_bucket == "LOW"
+                  else FT["neg"] if regime == "BEAR" and vix_bucket == "HIGH"
+                  else FT["warn"])
     regime_mover_rows = ""
     for r in br.get("regime_movers", []):
-        d = float(r.get("delta", 0))
-        arr = "↑" if d > 0 else "↓"
-        col = "#1B6F4A" if d > 0 else "#e74c3c"
+        dl = float(r.get("delta", 0))
+        arr = "↑" if dl > 0 else "↓"
+        col = FT["pos"] if dl > 0 else FT["neg"]
         regime_mover_rows += (
-            f"<tr><td>{r.get('signal','')}</td>"
-            f"<td class='r'>{float(r.get('base_weight',0)):.3f}</td>"
-            f"<td class='r' style='color:{col}'><strong>{arr} {float(r.get('regime_weight',0)):.3f}</strong></td>"
-            f"<td class='r' style='color:{col}'>{d:+.3f}</td></tr>"
+            "<tr>"
+            + _ft_td(r.get('signal', ''))
+            + _ft_td(f"{float(r.get('base_weight',0)):.3f}", "right")
+            + _ft_td(f"{arr} {float(r.get('regime_weight',0)):.3f}", "right", col, bold=True)
+            + _ft_td(f"{dl:+.3f}", "right", col)
+            + "</tr>"
         )
 
     # MVO optimizer weights table
     opt_long_rows = opt_short_rows = ""
     for r in br.get("opt_longs", []):
-        opt_long_rows  += (f"<tr><td><strong>{r.get('ticker','')}</strong></td>"
-                           f"<td class='r'>{float(r.get('weight',0)):.2%}</td>"
-                           f"<td>{r.get('sector','')}</td></tr>")
+        opt_long_rows  += ("<tr>" + _ft_td(r.get('ticker', ''), "left", FT["ink"], bold=True)
+                           + _ft_td(f"{float(r.get('weight',0)):.2%}", "right", FT["pos"])
+                           + _ft_td(r.get('sector', ''), "left", FT["sub"]) + "</tr>")
     for r in br.get("opt_shorts", []):
-        opt_short_rows += (f"<tr><td><strong>{r.get('ticker','')}</strong></td>"
-                           f"<td class='r'>{abs(float(r.get('weight',0))):.2%}</td>"
-                           f"<td>{r.get('sector','')}</td></tr>")
+        opt_short_rows += ("<tr>" + _ft_td(r.get('ticker', ''), "left", FT["ink"], bold=True)
+                           + _ft_td(f"{abs(float(r.get('weight',0))):.2%}", "right", FT["neg"])
+                           + _ft_td(r.get('sector', ''), "left", FT["sub"]) + "</tr>")
     opt_vol    = br.get("opt_exante_portfolio_vol", "—")
     opt_sharpe = br.get("opt_exante_sharpe", "—")
     opt_net    = br.get("opt_net_exposure", "—")
@@ -1208,117 +1302,71 @@ def _build_barra_risk_panel(br: dict) -> str:
     for row in br.get("xbrl_top5", []):
         def _p(v): return f"{float(v):.1%}" if v == v else "—"
         xbrl_rows += (
-            f"<tr><td><strong>{row.get('ticker','')}</strong></td>"
-            f"<td class='r'>{_p(row.get('earnings_yield'))}</td>"
-            f"<td class='r'>{_p(row.get('roe'))}</td>"
-            f"<td class='r'>{_p(row.get('gross_margin'))}</td>"
-            f"<td class='r'>{_p(row.get('revenue_growth_yoy'))}</td>"
-            f"<td class='r' style='color:#1B6F4A'><strong>{row.get('sig_fundamental','—')}</strong></td>"
-            f"</tr>"
+            "<tr>" + _ft_td(row.get('ticker', ''), "left", FT["ink"], bold=True)
+            + _ft_td(_p(row.get('earnings_yield')), "right")
+            + _ft_td(_p(row.get('roe')), "right")
+            + _ft_td(_p(row.get('gross_margin')), "right")
+            + _ft_td(_p(row.get('revenue_growth_yoy')), "right")
+            + _ft_td(row.get('sig_fundamental', '—'), "right", FT["pos"], bold=True) + "</tr>"
         )
 
-    return f"""
-<div class="mt36">
-  <p class="eyebrow">Barra-Style Factor Risk Decomposition</p>
-  <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">How much of the portfolio's risk comes from market factors vs. stock picking?</h3>
-  <div class="rule"></div>
-  <p class="lead">A well-managed long/short book should have 40–55% factor risk and 45–60% specific (stock-picking) risk. If factor risk is too high, returns are driven by market conditions rather than signal quality.</p>
+    # ── Section 1: Factor risk decomposition ──
+    comp_bar = (
+        f'<div style="margin:4px 0 2px"><div style="font-size:11px;color:{FT["mute"]};margin-bottom:6px">'
+        f'风险构成 — 系统性因子 vs Idiosyncratic (stock-picking)</div>'
+        f'<div style="background:{FT["inner"]};border:1px solid {FT["border2"]};border-radius:5px;overflow:hidden;height:26px;display:flex">'
+        f'<div style="background:{share_color};opacity:.85;width:{fshare_pct}%;display:flex;align-items:center;justify-content:center;color:#17130f;font-size:11px;font-weight:400">Factor {fshare_pct}%</div>'
+        f'<div style="background:{FT["pos"]};opacity:.85;width:{sshare_pct}%;display:flex;align-items:center;justify-content:center;color:#17130f;font-size:11px;font-weight:400">Specific {sshare_pct}%</div>'
+        f'</div><div style="font-size:11px;margin-top:6px;color:{share_color}">{share_note}</div></div>')
+    fv_tbl = _ft_table([("Factor", "left"), ("Annual Vol", "right")], fv_rows, "No data")
+    fn_tbl = _ft_table([("Factor", "left"), ("Before", "right"), ("After", "right"), ("Status", "right")], fn_rows, "No data")
+    sec1 = (_ft_open("Risk · Barra Factor Risk Decomposition",
+                     f"Systematic vs stock-picking · healthy factor share 40–55%")
+            + _ft_statgrid([
+                _ft_stat("Total Annual Vol", _pct(d0.get('total_annual_vol')), "Annualized portfolio volatility"),
+                _ft_stat("Factor Vol", _pct(d0.get('factor_vol')), "Systematic (beta/size/momentum)", FT["warn"]),
+                _ft_stat("Specific Vol", _pct(d0.get('specific_vol')), "Idiosyncratic (stock-picking)", FT["pos"]),
+            ], 160)
+            + comp_bar
+            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px">'
+            + f'<div>{_ft_subhead("Style Factor Annual Vol")}{fv_tbl}</div>'
+            + f'<div>{_ft_subhead(f"Factor Neutralization ({n_swaps} swaps)")}{fn_tbl}</div></div>'
+            + _ft_close("A healthy book runs 40–55% factor risk + 45–60% specific risk. Too much factor share = returns driven by the market, not signal quality."))
 
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:20px 0">
-    <div class="bud"><p class="bud-label">Total Annual Vol</p><p class="bud-val">{_pct(d.get('total_annual_vol'))}</p><p class="bud-note">Annualized portfolio volatility</p></div>
-    <div class="bud"><p class="bud-label">Factor Vol</p><p class="bud-val">{_pct(d.get('factor_vol'))}</p><p class="bud-note">Systematic (beta/size/momentum)</p></div>
-    <div class="bud"><p class="bud-label">Specific Vol</p><p class="bud-val">{_pct(d.get('specific_vol'))}</p><p class="bud-note">Idiosyncratic (stock-picking)</p></div>
-  </div>
+    # ── Section 2: Regime-conditional IC weights ──
+    rm_tbl = _ft_table([("Signal", "left"), ("Base wt", "right"), ("Regime wt", "right"), ("Delta", "right")],
+                       regime_mover_rows, "No regime adjustment (NEUTRAL/LOW)")
+    sec2 = (_ft_open("Signal Weights · Regime-Conditional IC Weights", "HMM state + VIX bucket")
+            + _ft_statgrid([
+                _ft_stat("Current Regime", reg_label, "HMM state + VIX bucket", reg_color),
+                _ft_stat("Active Multipliers", str(len(br.get("regime_movers", []))), "Signals reweighted today"),
+            ], 200)
+            + _ft_subhead("Biggest weight shifts today") + rm_tbl
+            + _ft_close("Different signals lead in different regimes: momentum/ML dominate in calm bull markets; quality/accruals/crowding take over in bear/crisis. Multipliers stack on IC²-optimal weights, capped at ±60%."))
 
-  <div style="margin:16px 0">
-    <p style="font-size:13px;color:#666;margin-bottom:6px">Risk composition — Factor vs. Specific</p>
-    <div style="background:#f0f0f0;border-radius:6px;overflow:hidden;height:28px;display:flex">
-      <div style="background:{share_color};width:{fshare_pct}%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700">Factor {fshare_pct}%</div>
-      <div style="background:#1B6F4A;width:{sshare_pct}%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700">Specific {sshare_pct}%</div>
-    </div>
-    <p style="font-size:12px;margin-top:6px;color:{share_color}">{share_note}</p>
-  </div>
+    # ── Section 3: MVO optimized weights ──
+    ol_tbl = _ft_table([("Ticker", "left"), ("Weight", "right"), ("Sector", "left")], opt_long_rows, "Run step90 to populate")
+    os_tbl = _ft_table([("Ticker", "left"), ("Weight", "right"), ("Sector", "left")], opt_short_rows, "Run step90 to populate")
+    sec3 = (_ft_open("Optimization · MVO Mean-Variance Optimal Weights", "scipy SLSQP · Barra covariance")
+            + _ft_statgrid([
+                _ft_stat("Ex-ante Vol", str(opt_vol)),
+                _ft_stat("Ex-ante Sharpe", str(opt_sharpe), "", FT["accent"]),
+                _ft_stat("Net Exposure", str(opt_net)),
+                _ft_stat("Turnover", str(opt_turn)),
+            ], 130)
+            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">'
+            + f'<div>{_ft_subhead("Longs")}{ol_tbl}</div><div>{_ft_subhead("Shorts")}{os_tbl}</div></div>'
+            + _ft_close("权重最大化 IC 加权 alpha 减风险惩罚(λ=2.0×组合方差)。约束:单票 ±10%、行业 30% 上限、beta 中性 ±0.20、Turnover ≤60%。"))
 
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:24px">
-    <div>
-      <p class="eyebrow" style="margin-bottom:8px">Style Factor Annual Volatility</p>
-      <table><thead><tr><th>Factor</th><th class="r">Annual Vol</th></tr></thead>
-      <tbody>{fv_rows if fv_rows else "<tr><td colspan='2' style='color:#999'>No data</td></tr>"}</tbody></table>
-    </div>
-    <div>
-      <p class="eyebrow" style="margin-bottom:8px">Factor Neutralization ({n_swaps} swaps applied)</p>
-      <p style="font-size:12px;color:#666;margin-bottom:8px">Net portfolio exposure before and after greedy swap correction</p>
-      <table><thead><tr><th>Factor</th><th class="r">Before</th><th class="r">After</th><th class="r">Status</th></tr></thead>
-      <tbody>{fn_rows if fn_rows else "<tr><td colspan='4' style='color:#999'>No data</td></tr>"}</tbody></table>
-    </div>
-  </div>
-</div>
+    # ── Section 4: XBRL fundamentals ──
+    xbrl_tbl = _ft_table([("Stock", "left"), ("E/P Yield", "right"), ("ROE", "right"),
+                          ("Gross Margin", "right"), ("Rev Growth", "right"), ("Score", "right")],
+                         xbrl_rows, "Run step89 to populate")
+    sec4 = (_ft_open("Fundamentals · XBRL Filing Signal (top 5)", "Free SEC EDGAR 10-K/10-Q")
+            + xbrl_tbl
+            + _ft_close("Earnings yield / ROE / gross margin / revenue growth taken straight from SEC XBRL filings — replacing the Bloomberg/FactSet fundamentals institutions pay for."))
 
-<div class="mt36">
-  <p class="eyebrow">Regime-Conditional IC Weights</p>
-  <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">How signal weights shift with market regime</h3>
-  <div class="rule"></div>
-  <p class="lead">Different signals lead in different regimes. Momentum/ML dominate in calm bull markets; quality/accruals/crowding take over in bear or crisis regimes. Multipliers applied on top of IC²-optimal weights; capped at ±60% change.</p>
-
-  <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin:16px 0 20px">
-    <div class="bud"><p class="bud-label">Current Regime</p><p class="bud-val" style="color:{reg_color}">{reg_label}</p><p class="bud-note">HMM state + VIX bucket</p></div>
-    <div class="bud"><p class="bud-label">Active Multipliers</p><p class="bud-val">{len(br.get("regime_movers",[]))}</p><p class="bud-note">Signals with adjusted weight today</p></div>
-  </div>
-
-  <p class="eyebrow" style="margin-bottom:8px">Biggest weight shifts today</p>
-  <table>
-    <thead><tr><th>Signal</th><th class="r">Base wt</th><th class="r">Regime wt</th><th class="r">Delta</th></tr></thead>
-    <tbody>{regime_mover_rows or "<tr><td colspan='4' style='color:#999'>No regime adjustment (NEUTRAL/LOW)</td></tr>"}</tbody>
-  </table>
-
-  <details style="margin-top:12px">
-    <summary style="cursor:pointer;font-size:13px;color:#666">Regime multiplier logic (click to expand)</summary>
-    <div style="font-size:12px;color:#666;margin-top:8px;line-height:1.7">
-      <strong>BULL/LOW-VIX:</strong> ml_score ×1.25, squeeze ×1.30, accruals ×0.80<br>
-      <strong>BEAR/LOW-VIX:</strong> accruals ×1.25, sig_crowd ×1.30, squeeze ×0.65<br>
-      <strong>BEAR/HIGH-VIX (crisis):</strong> accruals ×1.50, sig_crowd ×1.60, ml_score ×0.70<br>
-      <strong>BULL/HIGH-VIX (fear spike):</strong> squeeze ×1.40, sig_insider ×1.30<br>
-      All multipliers normalized so weights still sum to 1.00.
-    </div>
-  </details>
-</div>
-
-<div class="mt36">
-  <p class="eyebrow">MVO Optimized Portfolio Weights (step90)</p>
-  <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Risk-adjusted position sizes from mean-variance optimizer</h3>
-  <div class="rule"></div>
-  <p class="lead">Weights maximize IC-weighted alpha minus risk penalty (λ=2.0 × portfolio variance). Constraints: ±10% per stock, 30% sector cap, beta neutral ±0.20, 60% max turnover. Solver: scipy SLSQP with Barra B·F·B'+Δ covariance.</p>
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0">
-    <div class="bud"><p class="bud-label">Ex-ante Vol</p><p class="bud-val">{opt_vol}</p></div>
-    <div class="bud"><p class="bud-label">Ex-ante Sharpe</p><p class="bud-val">{opt_sharpe}</p></div>
-    <div class="bud"><p class="bud-label">Net Exposure</p><p class="bud-val">{opt_net}</p></div>
-    <div class="bud"><p class="bud-label">Turnover</p><p class="bud-val">{opt_turn}</p></div>
-  </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
-    <div>
-      <p class="eyebrow" style="margin-bottom:8px">Long Positions</p>
-      <table><thead><tr><th>Ticker</th><th class="r">Weight</th><th>Sector</th></tr></thead>
-      <tbody>{opt_long_rows or "<tr><td colspan='3' style='color:#999'>Run step90 to populate</td></tr>"}</tbody></table>
-    </div>
-    <div>
-      <p class="eyebrow" style="margin-bottom:8px">Short Positions</p>
-      <table><thead><tr><th>Ticker</th><th class="r">Weight</th><th>Sector</th></tr></thead>
-      <tbody>{opt_short_rows or "<tr><td colspan='3' style='color:#999'>Run step90 to populate</td></tr>"}</tbody></table>
-    </div>
-  </div>
-</div>
-
-<div class="mt36">
-  <p class="eyebrow">XBRL Fundamental Signal — Top 5 Stocks</p>
-  <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Best fundamentals in the universe (free SEC EDGAR data)</h3>
-  <div class="rule"></div>
-  <p class="lead">Earnings yield, ROE, gross margin, and revenue growth sourced directly from SEC 10-K/10-Q XBRL filings — replacing the Bloomberg/FactSet fundamental data used by institutional desks.</p>
-  <table>
-    <thead><tr><th>Stock</th><th class="r">E/P Yield</th><th class="r">ROE</th><th class="r">Gross Margin</th><th class="r">Rev Growth</th><th class="r">Score</th></tr></thead>
-    <tbody>{xbrl_rows if xbrl_rows else "<tr><td colspan='6' style='color:#999'>Run step89 to populate</td></tr>"}</tbody>
-  </table>
-</div>
-"""
+    return sec1 + sec2 + sec3 + sec4
 
 
 def load_factor_attribution() -> dict:
@@ -1509,7 +1557,7 @@ def load_v251_regime() -> dict:
         gate_spy  = spy > spy_ma200
         gate_mom  = qqq > qqq_3m
         vix_tier  = "LOW" if vix < 20 else ("MID" if vix < 25 else "HIGH")
-        vix_color = "#6BCCA0" if vix < 20 else ("#B8943F" if vix < 25 else "#EF9090")
+        vix_color = "#6BCCA0" if vix < 20 else ("#c8b487" if vix < 25 else "#EF9090")
         tqqq_base = 0.50 if (vix < 20) else (0.25 if vix < 25 else 0.00)
         gates_ok  = gate_spy and gate_ma and gate_mom
         if not gates_ok:
@@ -1819,200 +1867,115 @@ def _clean_trigger(text: str) -> str:
 
 
 def _build_signal_health_section(sh: dict) -> str:
-    """Render the Signal Health tab content from load_signal_health() data."""
+    """Render the Signal Health tab — rewritten to the FT dark-panel design."""
     parts = []
 
-    # ── IC Decay table ────────────────────────────────────────────────────────
+    def _iccol(v, lo=0.0, hi=0.05):
+        return FT["pos"] if v > hi else FT["neg"] if v < lo else FT["mute"]
+
+    # ── IC Decay by horizon ──
     ic_decay = sh.get("ic_decay", [])
     if ic_decay:
         rows = ""
         for r in ic_decay:
-            def _cell(v):
-                if v is None: return "<td style='color:#888'>—</td>"
-                color = "#2E7D52" if v > 0.05 else "#B83232" if v < -0.02 else "#888"
-                return f"<td style='color:{color};font-weight:600'>{v:+.3f}</td>"
-            rows += (f"<tr><td style='font-weight:700'>{r['signal']}</td>"
-                     + "".join(_cell(r.get(f"h{h}")) for h in [5,10,21,42,63,126])
-                     + "</tr>")
-        parts.append(f"""
-    <div class="card" style="margin-bottom:28px">
-      <div class="card-header">IC Decay by Forecast Horizon</div>
-      <div class="card-body" style="overflow-x:auto">
-        <p style="color:#888;font-size:12px;margin-bottom:12px">
-          Information Coefficient at each forward-return horizon.
-          Green = IC above 0.05, meaningfully predictive.
-          How fast IC decays = how quickly the edge disappears.</p>
-        <table style="width:100%;border-collapse:collapse;font-size:13px">
-          <thead><tr style="border-bottom:1px solid #eee;color:#888">
-            <th style="text-align:left;padding:8px">Signal</th>
-            <th>5d</th><th>10d</th><th>21d</th><th>42d</th><th>63d</th><th>126d</th>
-          </tr></thead>
-          <tbody>{rows}</tbody>
-        </table>
-      </div>
-    </div>""")
+            cells = _ft_td(r['signal'], "left", FT["ink"], bold=True)
+            for h in [5, 10, 21, 42, 63, 126]:
+                v = r.get(f"h{h}")
+                cells += _ft_td("—" if v is None else f"{v:+.3f}", "right",
+                                FT["mute"] if v is None else _iccol(v, -0.02, 0.05))
+            rows += f"<tr>{cells}</tr>"
+        parts.append(_ft_open("Signal Health · IC Decay by Horizon", "IC>0.05 = predictive · faster decay = edge fades faster")
+                     + _ft_table([("Signal", "left"), ("5d", "right"), ("10d", "right"),
+                                  ("21d", "right"), ("42d", "right"), ("63d", "right"), ("126d", "right")],
+                                 rows, "No data", minw=560)
+                     + _ft_close("Information Coefficient at each forward-return horizon. Green = IC>0.05 (meaningfully predictive); decay speed = how fast the edge disappears."))
 
-    # ── Cross-signal IC table ──────────────────────────────────────────────────
+    # ── Live OOS IC by signal ──
     cross_ic = sh.get("cross_ic", [])
     if cross_ic:
+        _SIG_NAMES = {"ml_ensemble": "AI model ensemble", "fear_vix": "Market fear (VIX)",
+                      "google_trends": "Google search interest", "sec_filing_lag": "SEC filing-lag signal",
+                      "accruals": "Earnings quality (accruals)", "momentum": "Momentum", "squeeze": "Short-squeeze potential"}
         rows = ""
-        _SIG_NAMES = {
-            "ml_ensemble":    "AI model combined (ensemble)",
-            "fear_vix":       "Market fear level (VIX)",
-            "google_trends":  "Google search interest",
-            "sec_filing_lag": "SEC filing lag signal",
-            "accruals":       "Earnings quality (accruals)",
-            "momentum":       "Momentum",
-            "squeeze":        "Short squeeze potential",
-        }
         for r in cross_ic:
-            def _ic_cell(v):
-                if v is None: return "<td style='color:#888;text-align:center'>—</td>"
-                color = "#2E7D52" if v > 0.05 else "#B83232" if v < 0 else "#B8943F"
-                return f"<td style='color:{color};font-weight:600;text-align:center'>{v:+.3f}</td>"
             sig_raw = r['signal']
             sig_name = _SIG_NAMES.get(sig_raw, sig_raw.replace("_", " ").title())
-            status_raw = str(r.get("status", ""))
-            if "ALERT" in status_raw:
-                status_color, status_text = "#B83232", "Alert — degraded"
-            elif "WARN" in status_raw:
-                status_color, status_text = "#B8943F", "Watch"
-            elif "OK" in status_raw:
-                status_color, status_text = "#2E7D52", "OK"
-            else:
-                status_color, status_text = "#888", status_raw
-            rows += (f"<tr><td style='padding:6px 8px'><span style='font-weight:700'>{sig_name}</span>"
-                     f"<br><span style='font-size:10px;color:#AAA'>{sig_raw}</span></td>"
-                     + _ic_cell(r.get("ic_3m")) + _ic_cell(r.get("ic_6m"))
-                     + f"<td style='color:{status_color};font-size:12px;text-align:center'>{status_text}</td>"
-                     + "</tr>")
-        parts.append(f"""
-    <div class="card" style="margin-bottom:28px">
-      <div class="card-header">Live OOS IC by Signal (Walk-Forward)</div>
-      <div class="card-body" style="overflow-x:auto">
-        <p style="color:#888;font-size:12px;margin-bottom:12px">
-          Out-of-sample Information Coefficient from walk-forward validation.
-          These are measured on real unseen data — not backtested.</p>
-        <table style="width:100%;border-collapse:collapse;font-size:13px">
-          <thead><tr style="border-bottom:1px solid #eee;color:#888">
-            <th style="text-align:left;padding:8px">Signal</th>
-            <th>3m IC</th><th>6m IC</th><th>Status</th>
-          </tr></thead>
-          <tbody>{rows}</tbody>
-        </table>
-      </div>
-    </div>""")
+            st = str(r.get("status", ""))
+            if "ALERT" in st: sc, stx = FT["neg"], "Alert — degraded"
+            elif "WARN" in st: sc, stx = FT["warn"], "Watch"
+            elif "OK" in st: sc, stx = FT["pos"], "OK"
+            else: sc, stx = FT["mute"], st
+            def _c(v):
+                return _ft_td("—" if v is None else f"{v:+.3f}", "right",
+                              FT["mute"] if v is None else _iccol(v, 0.0, 0.05))
+            name_td = (f'<td style="padding:6px 12px;border-bottom:1px solid #2a231b">'
+                       f'<span style="font-weight:400;color:{FT["ink"]}">{sig_name}</span>'
+                       f'<br><span style="font-size:10px;color:{FT["faint"]}">{sig_raw}</span></td>')
+            rows += (f"<tr>{name_td}" + _c(r.get("ic_3m")) + _c(r.get("ic_6m"))
+                     + _ft_td(stx, "right", sc) + "</tr>")
+        parts.append(_ft_open("Signal Health · Live OOS IC (walk-forward)", "Measured on real unseen data, not backtested")
+                     + _ft_table([("Signal", "left"), ("3m IC", "right"), ("6m IC", "right"), ("Status", "right")],
+                                 rows, "No data", minw=460)
+                     + _ft_close("Out-of-sample IC from walk-forward validation — measured on real unseen data, not backtest-fitted."))
 
-    # ── Correlation monitor ───────────────────────────────────────────────────
+    # ── Correlation & beta monitor ──
     corr = sh.get("corr_latest", {})
-    jb   = sh.get("joint_beta", {})
+    jb = sh.get("joint_beta", {})
 
     def _corr_row(label, key21, key63=None):
-        v21 = corr.get(key21)
-        v63 = corr.get(key63) if key63 else None
+        v21 = corr.get(key21); v63 = corr.get(key63) if key63 else None
         def _cv(v):
-            if v is None: return "<td style='color:#888;text-align:center'>—</td>"
-            color = "#B83232" if abs(v) > 0.80 else "#B8943F" if abs(v) > 0.65 else "#2E7D52"
-            return f"<td style='color:{color};font-weight:600;text-align:center'>{v:+.3f}</td>"
-        return f"<tr><td style='padding:6px 8px'>{label}</td>{_cv(v21)}{_cv(v63)}</tr>"
+            return _ft_td("—" if v is None else f"{v:+.3f}", "right",
+                          FT["mute"] if v is None else (FT["neg"] if abs(v) > 0.80 else FT["warn"] if abs(v) > 0.65 else FT["pos"]))
+        return f"<tr>{_ft_td(label)}{_cv(v21)}{_cv(v63)}</tr>"
 
     rows_corr = (_corr_row("Correlation vs SPY", "corr_vs_SPY_21d", "corr_vs_SPY_63d")
-              + _corr_row("Correlation vs QQQ", "corr_vs_QQQ_21d", "corr_vs_QQQ_63d")
-              + _corr_row("Beta vs SPY", "beta_vs_SPY_21d", "beta_vs_SPY_63d")
-              + _corr_row("Beta vs QQQ", "beta_vs_QQQ_21d", "beta_vs_QQQ_63d"))
-
+                 + _corr_row("Correlation vs QQQ", "corr_vs_QQQ_21d", "corr_vs_QQQ_63d")
+                 + _corr_row("Beta vs SPY", "beta_vs_SPY_21d", "beta_vs_SPY_63d")
+                 + _corr_row("Beta vs QQQ", "beta_vs_QQQ_21d", "beta_vs_QQQ_63d"))
     te = corr.get("tracking_error_vs_spy_21d")
     te_str = f"{te:.1%}" if te else "—"
-
-    # Joint beta available separately — show in same card
-    jb_val   = jb.get("joint", None)
-    jb_v9    = jb.get("v9", None)
-    jb_v11   = jb.get("v11", None)
-    jb_scale = jb.get("scale", 1)
-    jb_col   = "#B83232" if (jb_val or 0) > 1.1 else "#B8943F" if (jb_val or 0) > 0.9 else "#2E7D52"
-
-    _has_corr_data = any(k for k in corr if "corr_vs" in k or "beta_vs" in k)
-    _v9_days = round(corr.get("v9_return", 0) * 0 + 0) if corr else 0  # placeholder
-    corr_data_note = (
-        "<p style='color:#B8943F;font-size:12px;background:#FDF8EE;padding:8px 12px;border-radius:3px;margin-bottom:12px'>"
-        "Rolling correlation not yet computable — paper portfolio has fewer than 21 days of returns. "
-        "Values will populate automatically once enough history accumulates.</p>"
-    ) if not _has_corr_data else ""
-
+    jb_val = jb.get("joint", None); jb_v9 = jb.get("v9", None)
+    jb_v11 = jb.get("v11", None); jb_scale = jb.get("scale", 1)
+    jb_col = FT["neg"] if (jb_val or 0) > 1.1 else FT["warn"] if (jb_val or 0) > 0.9 else FT["pos"]
+    _has_corr = any(k for k in corr if "corr_vs" in k or "beta_vs" in k)
+    note = ("" if _has_corr else
+            f'<p style="color:{FT["warn"]};font-size:11.5px;background:{FT["inner"]};border:1px solid {FT["border2"]};padding:8px 12px;border-radius:5px;margin-bottom:12px">'
+            "Rolling correlation not yet computable — the paper book has fewer than 21 days of returns. It will populate automatically once enough history accumulates.</p>")
     jb_section = ""
     if jb_val is not None:
-        jb_section = f"""
-        <div style="margin-top:16px;padding-top:16px;border-top:1px solid #ECECEA">
-          <p style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:10px">Portfolio Beta — Live Estimate</p>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
-            <div style="text-align:center"><p style="font-size:10px;color:#AAA;margin-bottom:4px">Joint Beta</p><p style="font-size:22px;font-weight:700;color:{jb_col}">{jb_val:.2f}</p></div>
-            <div style="text-align:center"><p style="font-size:10px;color:#AAA;margin-bottom:4px">v9 Beta</p><p style="font-size:22px;font-weight:700;color:#1B2A4A">{(jb_v9 or 0):.2f}</p></div>
-            <div style="text-align:center"><p style="font-size:10px;color:#AAA;margin-bottom:4px">v11 Beta</p><p style="font-size:22px;font-weight:700;color:#1B2A4A">{(jb_v11 or 0):.2f}</p></div>
-            <div style="text-align:center"><p style="font-size:10px;color:#AAA;margin-bottom:4px">v9 Scale</p><p style="font-size:22px;font-weight:700;color:#1B2A4A">{jb_scale:.0%}</p></div>
-          </div>
-          <p style="font-size:11px;color:#888;margin-top:8px">Joint beta &gt;1.1 → v9 positions automatically scaled down. &lt;0.9 → headroom to add risk.</p>
-        </div>"""
+        jb_section = ('<div style="margin-top:16px">' + _ft_subhead("Portfolio Beta · Live Estimate")
+                      + _ft_statgrid([
+                          _ft_stat("Joint Beta", f"{jb_val:.2f}", "", jb_col),
+                          _ft_stat("v9 Beta", f"{(jb_v9 or 0):.2f}"),
+                          _ft_stat("v11 Beta", f"{(jb_v11 or 0):.2f}"),
+                          _ft_stat("v9 Scale", f"{jb_scale:.0%}"),
+                      ], 130)
+                      + f'<p style="font-size:11px;color:{FT["mute"]}">Joint beta &gt;1.1 → v9 positions auto-scaled down; &lt;0.9 → headroom to add risk.</p></div>')
+    parts.append(_ft_open("Signal Health · Correlation & Beta Monitor", f"SPY tracking error (21d ann.) {te_str} · Caution >65% / Alert >80%")
+                 + note
+                 + _ft_table([("Metric", "left"), ("21-day", "right"), ("63-day", "right")], rows_corr, "No data")
+                 + jb_section
+                 + _ft_close("Rolling correlation/beta vs benchmarks. Green = low correlation (well diversified); red = high correlation (strategy moving with the index)."))
 
-    parts.append(f"""
-    <div class="card" style="margin-bottom:28px">
-      <div class="card-header">Correlation &amp; Beta Monitor</div>
-      <div class="card-body">
-        {corr_data_note}
-        <p style="color:#888;font-size:12px;margin-bottom:12px">
-          Rolling correlation and beta vs benchmarks.
-          Green = low correlation (good diversification).
-          Red = high correlation (strategy moving with the index).</p>
-        <table style="width:100%;border-collapse:collapse;font-size:13px">
-          <thead><tr style="border-bottom:1px solid #eee;color:#888">
-            <th style="text-align:left;padding:6px 8px">Metric</th>
-            <th style="text-align:center">21-day</th><th style="text-align:center">63-day</th>
-          </tr></thead>
-          <tbody>{rows_corr}</tbody>
-        </table>
-        <p style="color:#888;font-size:12px;margin-top:12px">
-          Tracking error vs SPY (21d ann.): <strong>{te_str}</strong>
-          &nbsp;·&nbsp; Thresholds: Caution &gt;65%, Alert &gt;80%</p>
-        {jb_section}
-      </div>
-    </div>""")
-
-    # joint_beta now merged into the correlation card above
-
-    # ── Earnings Gate summary ─────────────────────────────────────────────────
+    # ── Earnings gate ──
     eg = sh.get("earnings_gate", {})
-    n_removed   = eg.get("n_removed",   0)
-    n_penalized = eg.get("n_penalized", 0)
+    n_removed = eg.get("n_removed", 0); n_penalized = eg.get("n_penalized", 0)
     if n_removed > 0 or n_penalized > 0:
-        removed_str   = ", ".join(eg.get("removed",   [])[:8]) or "—"
+        removed_str = ", ".join(eg.get("removed", [])[:8]) or "—"
         penalized_str = ", ".join(eg.get("penalized", [])[:8]) or "—"
-        parts.append(f"""
-    <div class="card mt24">
-      <div class="card-body">
-        <p class="eyebrow">Earnings Calendar Risk Gate</p>
-        <h3 style="font-family:'Playfair Display',serif;font-size:20px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">
-          {n_removed + n_penalized} tickers filtered or downweighted today</h3>
-        <div class="rule"></div>
-        <p class="lead">Tickers with earnings ≤3 days away are excluded from picks; those within 4–21 days have composite scores reduced.</p>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
-          <div style="background:#fff5f5;border:1px solid #e74c3c;border-radius:8px;padding:12px">
-            <p style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#e74c3c;margin:0 0 6px">
-              Removed from picks ({n_removed})</p>
-            <p style="font-size:13px;font-weight:600;color:#1A1A1A">{removed_str}</p>
-          </div>
-          <div style="background:#fff8e1;border:1px solid #f39c12;border-radius:8px;padding:12px">
-            <p style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#f39c12;margin:0 0 6px">
-              Score penalized ({n_penalized})</p>
-            <p style="font-size:13px;font-weight:600;color:#1A1A1A">{penalized_str}</p>
-          </div>
-        </div>
-      </div>
-    </div>""")
+        box = (lambda title, col, names: (
+            f'<div style="background:{FT["inner"]};border:1px solid {col};border-radius:6px;padding:12px">'
+            f'<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:{col};margin-bottom:6px">{title}</div>'
+            f'<div style="font-size:13px;font-weight:400;color:{FT["ink"]}">{names}</div></div>'))
+        parts.append(_ft_open("Signal Health · Earnings Calendar Risk Gate", f"Today {n_removed + n_penalized} names filtered / downweighted")
+                     + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">'
+                     + box(f"Removed from picks ({n_removed})", FT["neg"], removed_str)
+                     + box(f"Score penalized ({n_penalized})", FT["warn"], penalized_str) + '</div>'
+                     + _ft_close("Names with earnings ≤3 days out are dropped from picks; those 4–21 days out have composite scores reduced — avoiding earnings-gap risk."))
 
     if not parts:
-        parts.append("""
-    <div class="card"><div class="card-body" style="color:#888;text-align:center;padding:40px">
-      Run the daily pipeline to populate signal health data.
-    </div></div>""")
+        parts.append(_ft_open("Signal Health") + f'<p style="color:{FT["mute"]};text-align:center;padding:30px">Run the daily pipeline to populate signal-health data.</p>' + _ft_close())
 
     return "\n".join(parts)
 
@@ -2037,25 +2000,25 @@ def _build_short_scanner_section(df: "pd.DataFrame") -> str:
 
     def _urgency_badge(urgency: str) -> str:
         if urgency.startswith("NOW"):
-            return f'<span style="background:#FEE2E2;color:#B83232;font-size:10px;font-weight:700;padding:2px 8px;border-radius:3px">NOW</span>'
+            return f'<span style="background:#FEE2E2;color:#B83232;font-size:10px;font-weight:400;padding:2px 8px;border-radius:3px">NOW</span>'
         elif urgency.startswith("THIS WEEK"):
-            return f'<span style="background:#FDF8EE;color:#B8943F;font-size:10px;font-weight:700;padding:2px 8px;border-radius:3px">THIS WEEK</span>'
+            return f'<span style="background:#FDF8EE;color:#c8b487;font-size:10px;font-weight:400;padding:2px 8px;border-radius:3px">THIS WEEK</span>'
         else:
-            return f'<span style="background:#F3F4F6;color:#777;font-size:10px;font-weight:700;padding:2px 8px;border-radius:3px">WATCH</span>'
+            return f'<span style="background:#F3F4F6;color:#777;font-size:10px;font-weight:400;padding:2px 8px;border-radius:3px">WATCH</span>'
 
     def _score_bar(score: float) -> str:
-        color = "#B83232" if score >= 60 else ("#B8943F" if score >= 45 else "#888")
+        color = "#B83232" if score >= 60 else ("#c8b487" if score >= 45 else "#888")
         return (f'<div style="display:flex;align-items:center;gap:6px">'
-                f'<div style="width:48px;height:4px;background:#F0EDE8;border-radius:2px">'
+                f'<div style="width:48px;height:4px;background:#241f18;border-radius:2px">'
                 f'<div style="width:{score:.0f}%;height:4px;background:{color};border-radius:2px"></div></div>'
-                f'<span style="font-size:11px;font-weight:700;color:{color}">{score:.0f}</span>'
+                f'<span style="font-size:11px;font-weight:400;color:{color}">{score:.0f}</span>'
                 f'</div>')
 
     def _rsi_badge(rsi: float) -> str:
         if rsi >= 75:
-            return f'<span style="color:#B83232;font-weight:700;font-variant-numeric:tabular-nums">{rsi:.0f}</span>'
+            return f'<span style="color:#B83232;font-weight:400;font-variant-numeric:tabular-nums">{rsi:.0f}</span>'
         elif rsi >= 65:
-            return f'<span style="color:#B8943F;font-weight:700;font-variant-numeric:tabular-nums">{rsi:.0f}</span>'
+            return f'<span style="color:#c8b487;font-weight:400;font-variant-numeric:tabular-nums">{rsi:.0f}</span>'
         else:
             return f'<span style="color:#888;font-variant-numeric:tabular-nums">{rsi:.0f}</span>'
 
@@ -2064,9 +2027,9 @@ def _build_short_scanner_section(df: "pd.DataFrame") -> str:
             return '<span style="color:#CCC">—</span>'
         rr = float(rr)
         if rr >= 3.0:
-            return f'<span style="color:#1B6F4A;font-weight:700">{rr:.1f}x</span>'
+            return f'<span style="color:#1B6F4A;font-weight:400">{rr:.1f}x</span>'
         elif rr >= 2.0:
-            return f'<span style="color:#B8943F;font-weight:700">{rr:.1f}x</span>'
+            return f'<span style="color:#c8b487;font-weight:400">{rr:.1f}x</span>'
         else:
             return f'<span style="color:#AAA">{rr:.1f}x</span>'
 
@@ -2086,15 +2049,15 @@ def _build_short_scanner_section(df: "pd.DataFrame") -> str:
         return (
             f'<tr>'
             f'<td style="font-size:11px;color:#999;text-align:center">{rank}</td>'
-            f'<td><span style="font-weight:700;color:#1B2A4A;font-size:13px">{r["ticker"]}</span></td>'
+            f'<td><span style="font-weight:400;color:#1B2A4A;font-size:13px">{r["ticker"]}</span></td>'
             f'<td>{_score_bar(r["score"])}</td>'
-            f'<td style="font-variant-numeric:tabular-nums;font-weight:600">${r["price"]:.2f}</td>'
+            f'<td style="font-variant-numeric:tabular-nums;font-weight:400">${r["price"]:.2f}</td>'
             f'<td style="font-variant-numeric:tabular-nums">'
-            f'<span style="color:#333;font-weight:600">${r["entry_low"]:.2f}</span>'
+            f'<span style="color:#333;font-weight:400">${r["entry_low"]:.2f}</span>'
             f'<span style="color:#AAA;font-size:10px"> – </span>'
-            f'<span style="color:#333;font-weight:600">${r["entry_high"]:.2f}</span>'
+            f'<span style="color:#333;font-weight:400">${r["entry_high"]:.2f}</span>'
             f'</td>'
-            f'<td style="color:#B83232;font-variant-numeric:tabular-nums;font-weight:600">${r["stop_loss"]:.2f}</td>'
+            f'<td style="color:#B83232;font-variant-numeric:tabular-nums;font-weight:400">${r["stop_loss"]:.2f}</td>'
             f'<td style="color:#1B6F4A;font-variant-numeric:tabular-nums">${r["target_1"]:.2f}</td>'
             f'<td style="color:#1B6F4A;font-variant-numeric:tabular-nums">${r["target_2"]:.2f}</td>'
             f'<td>{_rr_badge(rr1)} / {_rr_badge(rr2)}</td>'
@@ -2112,28 +2075,14 @@ def _build_short_scanner_section(df: "pd.DataFrame") -> str:
     high_rr  = today_df[today_df["rr_1"].notna() & (today_df["rr_1"] >= 3)]
 
     return f"""
-<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:1px;background:#E2E0DC;margin-bottom:28px">
-  <div style="background:#fff;padding:18px 20px">
-    <p style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:600;margin:0 0 6px">Candidates Today</p>
-    <p style="font-family:'Playfair Display',serif;font-size:32px;font-weight:700;color:#1B2A4A;margin:0">{n}</p>
-    <p style="font-size:11px;color:#AAA;margin:4px 0 0">as of {as_of_str}</p>
-  </div>
-  <div style="background:#fff;padding:18px 20px">
-    <p style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:600;margin:0 0 6px">Act Now (1-2d)</p>
-    <p style="font-family:'Playfair Display',serif;font-size:32px;font-weight:700;color:#B83232;margin:0">{len(now_df)}</p>
-    <p style="font-size:11px;color:#AAA;margin:4px 0 0">RSI ≥ 75 or MACD cross</p>
-  </div>
-  <div style="background:#fff;padding:18px 20px">
-    <p style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:600;margin:0 0 6px">Avg RSI</p>
-    <p style="font-family:'Playfair Display',serif;font-size:32px;font-weight:700;color:#B8943F;margin:0">{avg_rsi:.0f}</p>
-    <p style="font-size:11px;color:#AAA;margin:4px 0 0">across all candidates</p>
-  </div>
-  <div style="background:#fff;padding:18px 20px">
-    <p style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:600;margin:0 0 6px">R/R ≥ 3x</p>
-    <p style="font-family:'Playfair Display',serif;font-size:32px;font-weight:700;color:#1B6F4A;margin:0">{len(high_rr)}</p>
-    <p style="font-size:11px;color:#AAA;margin:4px 0 0">favorable setups</p>
-  </div>
-</div>
+{_ft_open("Short Technical Scanner · today's candidates", f"as of {as_of_str}")}
+{_ft_statgrid([
+    _ft_stat("Candidates Today", str(n), f"as of {as_of_str}", FT["accent"]),
+    _ft_stat("Act Now (1-2d)", str(len(now_df)), "RSI ≥ 75 or MACD cross", FT["neg"]),
+    _ft_stat("Avg RSI", f"{avg_rsi:.0f}", "across all candidates", FT["warn"]),
+    _ft_stat("R/R ≥ 3x", str(len(high_rr)), "favorable setups", FT["pos"]),
+], 150)}
+{_ft_close()}
 
 <div class="tbl-wrap" style="margin-bottom:28px">
   <p class="tbl-title">All Short Candidates — sorted by score</p>
@@ -2160,18 +2109,18 @@ def _build_short_scanner_section(df: "pd.DataFrame") -> str:
 </div>
 
 <div class="method-card" style="border-top:3px solid #B83232">
-  <p style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:700;margin:0 0 14px">How to Use This Scanner</p>
+  <p style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:400;margin:0 0 14px">How to Use This Scanner</p>
   <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px">
     <div>
-      <p style="font-size:11px;color:#333;font-weight:700;margin:0 0 4px">Entry</p>
+      <p style="font-size:11px;color:#333;font-weight:400;margin:0 0 4px">Entry</p>
       <p style="font-size:11px;color:#666;line-height:1.6;margin:0">Short anywhere in the entry range. The ideal entry is the higher end of the range (on a bounce). If the stock is already below the entry range, the setup has partially played out — assess whether it's still valid.</p>
     </div>
     <div>
-      <p style="font-size:11px;color:#333;font-weight:700;margin:0 0 4px">Stop Loss</p>
+      <p style="font-size:11px;color:#333;font-weight:400;margin:0 0 4px">Stop Loss</p>
       <p style="font-size:11px;color:#666;line-height:1.6;margin:0">Close the short if price closes above the stop loss level. Set the stop as a hard order — not a mental note. The stop is based on the recent 10-day high + 0.5× ATR to allow for normal volatility.</p>
     </div>
     <div>
-      <p style="font-size:11px;color:#333;font-weight:700;margin:0 0 4px">Score Breakdown</p>
+      <p style="font-size:11px;color:#333;font-weight:400;margin:0 0 4px">Score Breakdown</p>
       <p style="font-size:11px;color:#666;line-height:1.6;margin:0">RSI overbought (25pts) + MACD bearish (20pts) + MA extension (20pts) + Bollinger Band (15pts) + Volume divergence (10pts) + Momentum (10pts). Score ≥ 60 = high conviction.</p>
     </div>
   </div>
@@ -2217,7 +2166,7 @@ def _build_three_book_panel() -> str:
 
     # ── Stats table rows ────────────────────────────────────────────────────
     BOOK_LABELS = {"SHORT": "SHORT (5d)", "MEDIUM": "MEDIUM (21d)", "LONG": "LONG (63d)", "SPY_BENCHMARK": "SPY"}
-    BOOK_COLORS = {"SHORT": "#4A9FE8", "MEDIUM": "#3ABA7A", "LONG": "#C8A040", "SPY_BENCHMARK": "#888"}
+    BOOK_COLORS = {"SHORT": "#7c96a0", "MEDIUM": "#3ABA7A", "LONG": "#C8A040", "SPY_BENCHMARK": "#888"}
 
     stats_rows = ""
     for book in ("SHORT", "MEDIUM", "LONG", "SPY_BENCHMARK"):
@@ -2280,12 +2229,12 @@ def _build_three_book_panel() -> str:
         rows  = ""
         for i, (tk, val) in enumerate(sorted(positions.items(),
                                              key=lambda x: -x[1])[:10]):
-            rows += f'<tr><td>{i+1}</td><td style="font-weight:700">{tk}</td><td style="text-align:right">${val:,.0f}</td></tr>'
+            rows += f'<tr><td>{i+1}</td><td style="font-weight:400">{tk}</td><td style="text-align:right">${val:,.0f}</td></tr>'
         if not rows:
             rows = '<tr><td colspan="3" style="color:#888;font-style:italic">No active positions</td></tr>'
         pos_html += f"""
         <div>
-          <p style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:{color};margin-bottom:4px">{book_name} BOOK</p>
+          <p style="font-size:10px;font-weight:400;letter-spacing:1.5px;text-transform:uppercase;color:{color};margin-bottom:4px">{book_name} BOOK</p>
           <p style="font-size:11px;color:#888;margin-bottom:8px">Last rebal: {last_reb} · Capital: ${eff_cap:,.0f} · Regime scale: {reg_scale:.0%}</p>
           <table style="width:100%;font-size:11px">
             <thead><tr><th>#</th><th>Ticker</th><th style="text-align:right">Target $</th></tr></thead>
@@ -2305,20 +2254,20 @@ def _build_three_book_panel() -> str:
         ic_bars += f"""
         <div style="margin-bottom:8px">
           <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px">
-            <span style="color:#444;font-weight:600">{sig}</span>
-            <span style="color:#888">IC {ic_str} → {mult_str}</span>
+            <span style="color:{FT['ink']};font-weight:400">{sig}</span>
+            <span style="color:{FT['mute']}">IC {ic_str} → {mult_str}</span>
           </div>
-          <div style="height:5px;background:#EEE;border-radius:2px">
+          <div style="height:5px;background:{FT['inner']};border-radius:2px">
             <div style="height:5px;width:{ic_pct:.0f}%;background:{bar_color};border-radius:2px"></div>
           </div>
         </div>"""
 
     return f"""
-<div class="mt36" id="three-book-panel">
-  <p class="eyebrow">Live Portfolio — Three-Book Strategy</p>
-  <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">
-    SHORT · MEDIUM · LONG — Alpaca Paper Trading + Backtest</h3>
-  <div class="rule"></div>
+<div id="three-book-panel" style="margin-bottom:26px;background:{FT['card']};border:1px solid {FT['border']};border-radius:8px;padding:16px 18px">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:14px">
+    <span style="font-size:11px;color:{FT['mute']};text-transform:uppercase;letter-spacing:.14em">Live Portfolio · Three-Book Strategy · SHORT · MEDIUM · LONG</span>
+    <span style="font-size:11px;color:{FT['mute']}">Alpaca paper trading + backtest</span>
+  </div>
 
   <!-- Stats table -->
   <div class="tbl-wrap" style="margin-bottom:24px">
@@ -2342,7 +2291,7 @@ def _build_three_book_panel() -> str:
 
   <!-- IC signal health -->
   <div class="method-card" style="margin-bottom:0">
-    <p style="font-size:10px;font-weight:700;color:#B8943F;margin-bottom:12px;text-transform:uppercase;letter-spacing:1.5px">Live Signal IC Health — Rolling 60d Spearman IC → Weight Multipliers</p>
+    <p style="font-size:10px;font-weight:400;color:#c8b487;margin-bottom:12px;text-transform:uppercase;letter-spacing:1.5px">Live Signal IC Health — Rolling 60d Spearman IC → Weight Multipliers</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 24px">{ic_bars}</div>
   </div>
 </div>
@@ -2363,7 +2312,7 @@ def _build_three_book_panel() -> str:
       plugins:{{legend:{{position:'top',labels:{{font:{{size:10}},boxWidth:12}}}},tooltip:{{callbacks:{{label:function(c){{return c.dataset.label+': '+(c.parsed.y*100-100).toFixed(1)+'%'}}}}}}}},
       scales:{{
         x:{{ticks:{{maxTicksLimit:8,font:{{size:9}}}},grid:{{display:false}}}},
-        y:{{ticks:{{callback:function(v){{return ((v-1)*100).toFixed(0)+'%'}},font:{{size:9}}}},grid:{{color:'#F0F0F0'}}}}
+        y:{{ticks:{{callback:function(v){{return ((v-1)*100).toFixed(0)+'%'}},font:{{size:9}},color:'#8a7f70'}},grid:{{color:'#2a231b'}}}}
       }}
     }}
   }});
@@ -2413,7 +2362,7 @@ def _build_pnl_ic_panels() -> str:
                   ${s.get('total_pnl_$',0):+,.0f}</td>
                 <td>{sign}{ret:.1f}%</td>
                 <td>{pred:.1f}%</td>
-                <td style="color:{acol};font-weight:600">{alpha:+.1f}%</td>
+                <td style="color:{acol};font-weight:400">{alpha:+.1f}%</td>
               </tr>"""
         except Exception:
             pass
@@ -2422,17 +2371,16 @@ def _build_pnl_ic_panels() -> str:
     ic_badge = ""
     if ic_val is not None:
         ic_color = "#4ade80" if ic_val > 0.05 else ("#facc15" if ic_val >= 0 else "#f87171")
-        ic_badge = f'<span style="color:{ic_color};font-weight:700">IC={ic_val:.3f}</span>'
+        ic_badge = f'<span style="color:{ic_color};font-weight:400">IC={ic_val:.3f}</span>'
 
     if not pnl_rows_html:
         pnl_rows_html = '<tr><td colspan="6" style="color:#888;text-align:center">Run step_alpaca_pnl.py to populate</td></tr>'
 
     pnl_panel = f"""
-<div class="tb-panel" style="margin-bottom:28px">
-  <div class="tb-panel-header">
-    <span class="tb-panel-title">Alpaca Paper P&amp;L Attribution</span>
-    <span style="font-size:11px;color:#888">{as_of}</span>
-    {ic_badge}
+<div class="tb-panel" style="margin-bottom:28px;background:{FT['card']};border:1px solid {FT['border']};border-radius:8px;padding:16px 18px">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+    <span style="font-size:11px;color:{FT['mute']};text-transform:uppercase;letter-spacing:.14em">Attribution · Alpaca Paper P&amp;L</span>
+    <span style="font-size:11px;color:{FT['mute']}">{as_of} &nbsp; {ic_badge}</span>
   </div>
   <div style="overflow-x:auto">
     <table class="tbl-compact" style="width:100%;font-size:12px">
@@ -2444,7 +2392,7 @@ def _build_pnl_ic_panels() -> str:
       </thead>
       <tbody>
         {pnl_rows_html}
-        <tr style="border-top:1px solid #333;font-weight:700">
+        <tr style="border-top:1px solid #333;font-weight:400">
           <td colspan="2">Total</td>
           <td style="color:{total_color}">${total_pnl:+,.0f}</td>
           <td colspan="3"></td>
@@ -2507,7 +2455,7 @@ def _build_pnl_ic_panels() -> str:
                     f"margin-{'left' if ic < 0 else 'right'}:2px"
                 )
                 badge = (f'<span style="background:{badge_color};color:{bar_color};'
-                         f'font-size:9px;padding:1px 5px;border-radius:3px;font-weight:600">'
+                         f'font-size:9px;padding:1px 5px;border-radius:3px;font-weight:400">'
                          f'{status}</span>')
                 bar_rows.append(f"""
           <tr>
@@ -2531,10 +2479,10 @@ def _build_pnl_ic_panels() -> str:
         ic_bars_html = '<p style="color:#888;font-size:12px;padding:20px">Run step_rolling_ic.py first.</p>'
 
     ic_panel = f"""
-<div class="tb-panel" style="margin-bottom:28px">
-  <div class="tb-panel-header">
-    <span class="tb-panel-title">Signal IC Health</span>
-    <span style="font-size:11px;color:#888">{ic_note}</span>
+<div class="tb-panel" style="margin-bottom:28px;background:{FT['card']};border:1px solid {FT['border']};border-radius:8px;padding:16px 18px">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+    <span style="font-size:11px;color:{FT['mute']};text-transform:uppercase;letter-spacing:.14em">Signal IC Health</span>
+    <span style="font-size:11px;color:{FT['mute']}">{ic_note}</span>
   </div>
   <div style="overflow-y:auto;max-height:230px;padding:4px 0">
     {ic_bars_html}
@@ -2565,7 +2513,7 @@ def _build_dcf_section(df: "pd.DataFrame") -> str:
 
     # Stage distribution
     stage_counts = today_df["stage"].value_counts().to_dict() if "stage" in today_df.columns else {}
-    stage_colors = {"High Growth": "#1B6F4A", "Maturing": "#B8943F", "Mature": "#888",
+    stage_colors = {"High Growth": "#1B6F4A", "Maturing": "#c8b487", "Mature": "#888",
                     "Value Trap": "#B83232", "Unknown": "#CCC"}
 
     def _pct(x): return f"{x*100:.1f}%" if pd.notna(x) else "—"
@@ -2582,24 +2530,24 @@ def _build_dcf_section(df: "pd.DataFrame") -> str:
 
     def _row_under(r):
         upside = r["upside_pct"]
-        up_color = "#1B6F4A" if upside > 30 else ("#B8943F" if upside > 15 else "#888")
+        up_color = "#1B6F4A" if upside > 30 else ("#c8b487" if upside > 15 else "#888")
         roic = _pct(r.get("roic"))
         spread = r.get("roic_wacc_spread")
-        sp_color = "#1B6F4A" if (spread or 0) > 0.05 else ("#B8943F" if (spread or 0) > 0 else "#B83232")
+        sp_color = "#1B6F4A" if (spread or 0) > 0.05 else ("#c8b487" if (spread or 0) > 0 else "#B83232")
         stage = r.get("stage", "—")
         stage_color = stage_colors.get(stage, "#888")
         return (
             f'<tr>'
-            f'<td style="font-weight:700;color:#1B2A4A">{r["ticker"]}</td>'
+            f'<td style="font-weight:400;color:#1B2A4A">{r["ticker"]}</td>'
             f'<td style="color:#555;font-size:11px">{str(r.get("name",""))[:22]}</td>'
             f'<td style="color:#555;font-size:11px">{r.get("sector","")[:14]}</td>'
             f'<td style="font-variant-numeric:tabular-nums">${r.get("price",0):.0f}</td>'
             f'<td style="font-variant-numeric:tabular-nums">${r.get("iv_per_share",0):.0f}</td>'
-            f'<td style="color:{up_color};font-weight:700;font-variant-numeric:tabular-nums">{upside:+.0f}%</td>'
+            f'<td style="color:{up_color};font-weight:400;font-variant-numeric:tabular-nums">{upside:+.0f}%</td>'
             f'<td style="font-variant-numeric:tabular-nums">{roic}</td>'
             f'<td style="font-variant-numeric:tabular-nums">{_pct(r.get("wacc"))}</td>'
-            f'<td style="color:{sp_color};font-weight:600;font-variant-numeric:tabular-nums">{_pct(spread)}</td>'
-            f'<td style="color:{stage_color};font-size:11px;font-weight:600">{stage}</td>'
+            f'<td style="color:{sp_color};font-weight:400;font-variant-numeric:tabular-nums">{_pct(spread)}</td>'
+            f'<td style="color:{stage_color};font-size:11px;font-weight:400">{stage}</td>'
             f'<td style="font-variant-numeric:tabular-nums;color:#888">{r.get("pvgo_pct",0):.0f}%</td>'
             f'</tr>'
         )
@@ -2611,28 +2559,28 @@ def _build_dcf_section(df: "pd.DataFrame") -> str:
         stage_color = stage_colors.get(stage, "#888")
         return (
             f'<tr>'
-            f'<td style="font-weight:700;color:#1B2A4A">{r["ticker"]}</td>'
+            f'<td style="font-weight:400;color:#1B2A4A">{r["ticker"]}</td>'
             f'<td style="color:#555;font-size:11px">{str(r.get("name",""))[:22]}</td>'
             f'<td style="color:#555;font-size:11px">{r.get("sector","")[:14]}</td>'
             f'<td style="font-variant-numeric:tabular-nums">${r.get("price",0):.0f}</td>'
             f'<td style="font-variant-numeric:tabular-nums">${r.get("iv_per_share",0):.0f}</td>'
-            f'<td style="color:#B83232;font-weight:700;font-variant-numeric:tabular-nums">{upside:+.0f}%</td>'
+            f'<td style="color:#B83232;font-weight:400;font-variant-numeric:tabular-nums">{upside:+.0f}%</td>'
             f'<td style="font-variant-numeric:tabular-nums">{roic}</td>'
             f'<td style="font-variant-numeric:tabular-nums">{_pct(r.get("wacc"))}</td>'
-            f'<td style="color:{stage_color};font-size:11px;font-weight:600">{stage}</td>'
+            f'<td style="color:{stage_color};font-size:11px;font-weight:400">{stage}</td>'
             f'</tr>'
         )
 
     def _row_eva(r):
-        spread_color = "#1B6F4A" if (r.get("roic_wacc_spread") or 0) > 0.10 else "#B8943F"
+        spread_color = "#1B6F4A" if (r.get("roic_wacc_spread") or 0) > 0.10 else "#c8b487"
         return (
             f'<tr>'
-            f'<td style="font-weight:700;color:#1B2A4A">{r["ticker"]}</td>'
+            f'<td style="font-weight:400;color:#1B2A4A">{r["ticker"]}</td>'
             f'<td style="color:#555;font-size:11px">{str(r.get("name",""))[:22]}</td>'
-            f'<td style="color:{spread_color};font-weight:700;font-variant-numeric:tabular-nums">{_pct(r.get("roic"))}</td>'
+            f'<td style="color:{spread_color};font-weight:400;font-variant-numeric:tabular-nums">{_pct(r.get("roic"))}</td>'
             f'<td style="font-variant-numeric:tabular-nums">{_pct(r.get("wacc"))}</td>'
-            f'<td style="color:{spread_color};font-weight:700">{_pct(r.get("roic_wacc_spread"))}</td>'
-            f'<td style="font-variant-numeric:tabular-nums;color:#1B6F4A;font-weight:700">${r.get("eva_m",0):+,.0f}M</td>'
+            f'<td style="color:{spread_color};font-weight:400">{_pct(r.get("roic_wacc_spread"))}</td>'
+            f'<td style="font-variant-numeric:tabular-nums;color:#1B6F4A;font-weight:400">${r.get("eva_m",0):+,.0f}M</td>'
             f'<td style="color:#555;font-size:11px">{r.get("stage","")}</td>'
             f'</tr>'
         )
@@ -2640,18 +2588,18 @@ def _build_dcf_section(df: "pd.DataFrame") -> str:
     def _row_destroy(r):
         return (
             f'<tr>'
-            f'<td style="font-weight:700;color:#B83232">{r["ticker"]}</td>'
+            f'<td style="font-weight:400;color:#B83232">{r["ticker"]}</td>'
             f'<td style="color:#555;font-size:11px">{str(r.get("name",""))[:22]}</td>'
             f'<td style="font-variant-numeric:tabular-nums;color:#B83232">{_pct(r.get("roic"))}</td>'
             f'<td style="font-variant-numeric:tabular-nums">{_pct(r.get("wacc"))}</td>'
-            f'<td style="color:#B83232;font-weight:700">{_pct(r.get("roic_wacc_spread"))}</td>'
+            f'<td style="color:#B83232;font-weight:400">{_pct(r.get("roic_wacc_spread"))}</td>'
             f'<td style="color:#B83232;font-variant-numeric:tabular-nums">${r.get("eva_m",0):+,.0f}M</td>'
             f'<td style="color:#555;font-size:11px">{r.get("stage","")}</td>'
             f'</tr>'
         )
 
     stage_pills = "".join(
-        f'<span style="display:inline-block;padding:4px 12px;border-radius:3px;font-size:11px;font-weight:700;'
+        f'<span style="display:inline-block;padding:4px 12px;border-radius:3px;font-size:11px;font-weight:400;'
         f'color:{stage_colors.get(s,"#888")};border:1px solid {stage_colors.get(s,"#888")};margin:3px">'
         f'{s}: {cnt}</span>'
         for s, cnt in stage_counts.items()
@@ -2666,7 +2614,7 @@ def _build_dcf_section(df: "pd.DataFrame") -> str:
 <div class="method-card" style="margin-bottom:28px">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
     <div>
-      <p style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#B8943F;font-weight:700;margin:0 0 4px">Damodaran 3-Stage DCF · {n_total} stocks</p>
+      <p style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#c8b487;font-weight:400;margin:0 0 4px">Damodaran 3-Stage DCF · {n_total} stocks</p>
       <p style="font-size:12px;color:#555;margin:0">rf={rf_str} · ERP={erp_str} · Stable g=2.5% · as of {as_of_str}</p>
     </div>
     <div style="text-align:right">
@@ -2746,20 +2694,20 @@ def _build_dcf_section(df: "pd.DataFrame") -> str:
 </div>
 
 <div class="method-card" style="margin-top:32px;border-top:3px solid #1B2A4A">
-  <p style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:700;margin:0 0 12px">Methodology — Damodaran 5 Questions</p>
+  <p style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:400;margin:0 0 12px">Methodology — Damodaran 5 Questions</p>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
     <div>
-      <p style="font-size:11px;color:#333;font-weight:700;margin:0 0 3px">1. Value of existing assets?</p>
+      <p style="font-size:11px;color:#333;font-weight:400;margin:0 0 3px">1. Value of existing assets?</p>
       <p style="font-size:11px;color:#666;margin:0 0 10px">ROIC = NOPAT / Invested Capital. EVA = (ROIC−WACC)×IC. Positive EVA = existing operations create value.</p>
-      <p style="font-size:11px;color:#333;font-weight:700;margin:0 0 3px">2. Value of growth assets?</p>
+      <p style="font-size:11px;color:#333;font-weight:400;margin:0 0 3px">2. Value of growth assets?</p>
       <p style="font-size:11px;color:#666;margin:0 0 10px">PVGO = Enterprise Value − (NOPAT/WACC). Shows what % of market price is priced-in future growth, not current operations.</p>
-      <p style="font-size:11px;color:#333;font-weight:700;margin:0 0 3px">3. Cash flow risk?</p>
+      <p style="font-size:11px;color:#333;font-weight:400;margin:0 0 3px">3. Cash flow risk?</p>
       <p style="font-size:11px;color:#666;margin:0">WACC = Ke×(E/V) + Kd(1−t)×(D/V). Ke=rf+β×ERP. Higher WACC = higher risk = lower present value.</p>
     </div>
     <div>
-      <p style="font-size:11px;color:#333;font-weight:700;margin:0 0 3px">4. When does it mature?</p>
+      <p style="font-size:11px;color:#333;font-weight:400;margin:0 0 3px">4. When does it mature?</p>
       <p style="font-size:11px;color:#666;margin:0 0 10px">Lifecycle stage (High Growth/Maturing/Mature/Value Trap) based on revenue growth and ROIC-WACC spread. Stage 2 (yr 6-10) linearly fades to terminal.</p>
-      <p style="font-size:11px;color:#333;font-weight:700;margin:0 0 3px">5. Equity value per share?</p>
+      <p style="font-size:11px;color:#333;font-weight:400;margin:0 0 3px">5. Equity value per share?</p>
       <p style="font-size:11px;color:#666;margin:0">EV = PV of Stage 1 + Stage 2 + Terminal FCFFs. Equity Value = EV − Net Debt. IV/share = Equity Value / Shares. Data: yfinance only.</p>
     </div>
   </div>
@@ -2773,9 +2721,9 @@ def _build_economic_calendar_widget(econ_cal: dict) -> str:
     if not events:
         return ""
 
-    IMPACT_COLOR = {"high": "#B83232", "medium": "#B8943F"}
+    IMPACT_COLOR = {"high": "#B83232", "medium": "#c8b487"}
     TYPE_BG = {"FOMC": "#EFF6FF", "CPI": "#F0FDF4", "PPI": "#FFF7ED", "NFP": "#F5F3FF"}
-    TYPE_TC = {"FOMC": "#1E40AF", "CPI": "#166534", "PPI": "#9A3412", "NFP": "#581C87"}
+    TYPE_TC = {"FOMC": "#495663", "CPI": "#166534", "PPI": "#9A3412", "NFP": "#544a66"}
 
     rows = []
     for ev in events[:12]:
@@ -2784,16 +2732,16 @@ def _build_economic_calendar_widget(econ_cal: dict) -> str:
         timing = "TODAY" if days == 0 else (f"Tomorrow" if days == 1 else f"in {days}d")
         bg     = TYPE_BG.get(ev["type"], "#F9FAFB")
         tc     = TYPE_TC.get(ev["type"], "#374151")
-        ic     = IMPACT_COLOR.get(ev.get("impact", "medium"), "#B8943F")
+        ic     = IMPACT_COLOR.get(ev.get("impact", "medium"), "#c8b487")
         rows.append(
             f'<tr>'
-            f'<td style="font-weight:700;color:#1B2A4A;white-space:nowrap">{d_str}</td>'
-            f'<td style="color:{ic};font-size:11px;font-weight:700;white-space:nowrap">{timing}</td>'
-            f'<td><span style="background:{bg};color:{tc};font-size:9px;font-weight:800;'
+            f'<td style="font-weight:400;color:#1B2A4A;white-space:nowrap">{d_str}</td>'
+            f'<td style="color:{ic};font-size:11px;font-weight:400;white-space:nowrap">{timing}</td>'
+            f'<td><span style="background:{bg};color:{tc};font-size:9px;font-weight:500;'
             f'letter-spacing:.8px;text-transform:uppercase;padding:2px 7px;border-radius:2px">'
             f'{ev["type"]}</span></td>'
             f'<td style="font-size:12px">{ev["emoji"]} {ev["name"]}</td>'
-            f'<td><span style="font-size:10px;font-weight:700;color:{ic}">'
+            f'<td><span style="font-size:10px;font-weight:400;color:{ic}">'
             f'{"●●●" if ev.get("impact")=="high" else "●●○"}</span></td>'
             f'</tr>'
         )
@@ -2801,7 +2749,7 @@ def _build_economic_calendar_widget(econ_cal: dict) -> str:
     return f"""
     <div class="mt36">
       <p class="eyebrow">Economic Calendar</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">
         Upcoming high-impact events — next 45 days</h3>
       <div class="rule"></div>
       <div style="overflow-x:auto">
@@ -2824,12 +2772,12 @@ def _build_live_market_pulse() -> str:
     return f"""
     <div class="mt36">
       <p class="eyebrow">Live Market Pulse</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">
         Real-time prices — auto-refreshes every 90 seconds</h3>
       <div class="rule"></div>
       <div id="pulse-bar" style="display:grid;grid-template-columns:repeat(7,1fr);gap:10px;margin-bottom:8px">
         <!-- filled by JS -->
-        <div style="text-align:center;padding:12px 6px;background:#fff;border:1px solid #E2E0DC;border-radius:4px;color:#CCC;font-size:11px">Loading…</div>
+        <div style="text-align:center;padding:12px 6px;background:#fff;border:1px solid #241f18;border-radius:4px;color:#CCC;font-size:11px">Loading…</div>
       </div>
       <p id="pulse-updated" style="font-size:10px;color:#BBB;text-align:right"></p>
     </div>
@@ -2847,16 +2795,16 @@ def _build_live_market_pulse() -> str:
             var prices = data.prices || {{}};
             var cells = TICKERS.map(function(t) {{
               var p = prices[t];
-              if (!p) return '<div style="text-align:center;padding:12px 6px;background:#fff;border:1px solid #E2E0DC;border-radius:4px"><p style="font-size:11px;font-weight:700;color:#1B2A4A">' + t + '</p><p style="font-size:12px;color:#CCC">—</p></div>';
+              if (!p) return '<div style="text-align:center;padding:12px 6px;background:#fff;border:1px solid #241f18;border-radius:4px"><p style="font-size:11px;font-weight:400;color:#1B2A4A">' + t + '</p><p style="font-size:12px;color:#CCC">—</p></div>';
               var color = p.chg_pct >= 0 ? '#1B6F4A' : '#B83232';
               var bg    = p.chg_pct >= 0 ? '#F0FDF4' : '#FEF2F2';
               var sign  = p.chg_pct >= 0 ? '+' : '';
               var isVIX = t === 'VIX';
               if (isVIX) {{ color = p.chg_pct >= 0 ? '#B83232' : '#1B6F4A'; bg = p.chg_pct >= 0 ? '#FEF2F2' : '#F0FDF4'; }}
               return '<div style="text-align:center;padding:10px 6px;background:' + bg + ';border:1px solid ' + color + '33;border-radius:4px;border-top:2px solid ' + color + '">'
-                + '<p style="font-size:10px;font-weight:800;letter-spacing:1px;color:#555;margin-bottom:4px">' + t + '</p>'
-                + '<p style="font-size:16px;font-weight:700;color:#1A1A1A;margin-bottom:2px">$' + p.price.toFixed(2) + '</p>'
-                + '<p style="font-size:11px;font-weight:700;color:' + color + '">' + sign + p.chg_pct.toFixed(2) + '%</p>'
+                + '<p style="font-size:10px;font-weight:500;letter-spacing:1px;color:#555;margin-bottom:4px">' + t + '</p>'
+                + '<p style="font-size:16px;font-weight:400;color:#1A1A1A;margin-bottom:2px">$' + p.price.toFixed(2) + '</p>'
+                + '<p style="font-size:11px;font-weight:400;color:' + color + '">' + sign + p.chg_pct.toFixed(2) + '%</p>'
                 + '</div>';
             }});
             bar.innerHTML = cells.join('');
@@ -2884,15 +2832,15 @@ def _canyon_global_overlays() -> str:
     max-height:88vh;overflow-y:auto;box-shadow:0 24px 60px rgba(0,0,0,.35);position:relative">
 
     <!-- Header -->
-    <div id="ql-header" style="background:#0D1B35;padding:20px 24px 16px;border-radius:8px 8px 0 0;position:sticky;top:0;z-index:1">
+    <div id="ql-header" style="background:#231a12;padding:20px 24px 16px;border-radius:8px 8px 0 0;position:sticky;top:0;z-index:1">
       <div style="display:flex;align-items:flex-start;justify-content:space-between">
         <div>
           <p id="ql-name" style="font-size:11px;color:rgba(255,255,255,.5);margin-bottom:4px"></p>
-          <p id="ql-ticker-title" style="font-family:'Playfair Display',serif;font-size:26px;font-weight:700;color:#fff"></p>
+          <p id="ql-ticker-title" style="font-family:'Playfair Display',serif;font-size:26px;font-weight:400;color:#fff"></p>
         </div>
         <div style="text-align:right">
-          <p id="ql-price" style="font-size:26px;font-weight:700;color:#fff"></p>
-          <p id="ql-chg" style="font-size:13px;font-weight:700"></p>
+          <p id="ql-price" style="font-size:26px;font-weight:400;color:#fff"></p>
+          <p id="ql-chg" style="font-size:13px;font-weight:400"></p>
         </div>
       </div>
       <!-- Sparkline canvas -->
@@ -2920,13 +2868,13 @@ def _canyon_global_overlays() -> str:
       <div id="ql-ai" style="margin-bottom:16px"></div>
 
       <!-- Ask AI button -->
-      <div style="display:flex;gap:10px;margin-top:16px;border-top:1px solid #F0EDE8;padding-top:16px">
+      <div style="display:flex;gap:10px;margin-top:16px;border-top:1px solid #241f18;padding-top:16px">
         <button id="ql-ask-btn" onclick="canyonQL.askAI()"
           style="flex:1;background:#1B2A4A;color:#fff;border:none;padding:10px 16px;border-radius:4px;
-          cursor:pointer;font-size:12px;font-weight:700">💬 Ask AI about this stock</button>
+          cursor:pointer;font-size:12px;font-weight:400">💬 Ask AI about this stock</button>
         <button onclick="canyonQL.addToWatchlist()"
-          style="background:#fff;border:1px solid #B8943F;color:#B8943F;padding:10px 16px;border-radius:4px;
-          cursor:pointer;font-size:12px;font-weight:700">⭐ Add to Watchlist</button>
+          style="background:#fff;border:1px solid #c8b487;color:#c8b487;padding:10px 16px;border-radius:4px;
+          cursor:pointer;font-size:12px;font-weight:400">⭐ Add to Watchlist</button>
       </div>
     </div>
 
@@ -2934,7 +2882,7 @@ def _canyon_global_overlays() -> str:
     <div id="ql-loading" style="display:none;position:absolute;inset:0;background:#fff;border-radius:8px;
       align-items:center;justify-content:center">
       <div style="text-align:center">
-        <div style="width:32px;height:32px;border:3px solid #E2E0DC;border-top-color:#1B2A4A;
+        <div style="width:32px;height:32px;border:3px solid #241f18;border-top-color:#1B2A4A;
           border-radius:50%;animation:ql-spin 0.8s linear infinite;margin:0 auto 12px"></div>
         <p style="font-size:12px;color:#888">Loading live data…</p>
       </div>
@@ -2945,17 +2893,17 @@ def _canyon_global_overlays() -> str:
 <style>
 @keyframes ql-spin {{ to {{ transform:rotate(360deg) }} }}
 .canyon-ticker-link {{
-  color:#1B2A4A;font-weight:700;cursor:pointer;text-decoration:none;
-  border-bottom:1px dotted #B8943F;transition:color .15s;
+  color:#1B2A4A;font-weight:400;cursor:pointer;text-decoration:none;
+  border-bottom:1px dotted #c8b487;transition:color .15s;
 }}
-.canyon-ticker-link:hover {{ color:#B8943F }}
+.canyon-ticker-link:hover {{ color:#c8b487 }}
 /* Chat styles */
 .chat-msg-user {{
   background:#1B2A4A;color:#fff;padding:10px 14px;border-radius:12px 12px 3px 12px;
   align-self:flex-end;max-width:75%;font-size:13px;line-height:1.5;word-break:break-word;
 }}
 .chat-msg-ai {{
-  background:#fff;border:1px solid #E2E0DC;padding:12px 14px;border-radius:3px 12px 12px 12px;
+  background:#fff;border:1px solid #241f18;padding:12px 14px;border-radius:3px 12px 12px 12px;
   max-width:85%;font-size:13px;line-height:1.65;word-break:break-word;
   white-space:pre-wrap;box-shadow:0 1px 3px rgba(0,0,0,.06);
 }}
@@ -2964,18 +2912,18 @@ def _canyon_global_overlays() -> str:
   display:flex;gap:4px;align-items:center;padding:10px 14px;
 }}
 .chat-dot {{
-  width:7px;height:7px;border-radius:50%;background:#B8943F;
+  width:7px;height:7px;border-radius:50%;background:#c8b487;
   animation:chat-bounce .9s infinite;
 }}
 .chat-dot:nth-child(2) {{ animation-delay:.15s }}
 .chat-dot:nth-child(3) {{ animation-delay:.30s }}
 @keyframes chat-bounce {{ 0%,60%,100% {{ transform:translateY(0) }} 30% {{ transform:translateY(-6px) }} }}
 .chip-btn {{
-  background:#F2F1EE;border:1px solid #E2E0DC;padding:6px 11px;border-radius:20px;
-  cursor:pointer;font-size:11px;color:#444;white-space:nowrap;
+  background:#191410;border:1px solid #2f281f;padding:6px 11px;border-radius:20px;
+  cursor:pointer;font-size:11px;color:#a89c8c;white-space:nowrap;
   transition:background .15s,border-color .15s;
 }}
-.chip-btn:hover {{ background:#1B2A4A;color:#fff;border-color:#1B2A4A }}
+.chip-btn:hover {{ background:#c8b487;color:#17130f;border-color:#c8b487 }}
 </style>
 
 <script>
@@ -3079,22 +3027,22 @@ var canyonQL = (function() {{
     var metricGrid = document.getElementById('ql-metrics');
     metricGrid.style.gridTemplateColumns = 'repeat(4,1fr)';
     metricGrid.innerHTML = metrics.map(function(m) {{
-      return '<div style="text-align:center;background:#F7F6F3;border-radius:4px;padding:10px 6px">'
+      return '<div style="text-align:center;background:#241f18;border-radius:4px;padding:10px 6px">'
         + '<p style="font-size:9px;color:#AAA;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">' + m[0] + '</p>'
-        + '<p style="font-size:14px;font-weight:700;color:#1B2A4A">' + m[1] + '</p></div>';
+        + '<p style="font-size:14px;font-weight:400;color:#1B2A4A">' + m[1] + '</p></div>';
     }}).join('');
 
     // Canyon signal
     var sig = d.canyon_signal;
     if (sig && sig.alpha_score !== null) {{
       var pct  = Math.min(100, Math.max(0, (sig.alpha_score + 3) / 6 * 100));
-      var scolor = sig.alpha_score > 1 ? '#1B6F4A' : (sig.alpha_score < -1 ? '#B83232' : '#B8943F');
+      var scolor = sig.alpha_score > 1 ? '#1B6F4A' : (sig.alpha_score < -1 ? '#B83232' : '#c8b487');
       document.getElementById('ql-signals').innerHTML =
-        '<div style="background:#F7F6F3;border-radius:4px;padding:12px 14px;border-left:3px solid #1B2A4A">'
+        '<div style="background:#241f18;border-radius:4px;padding:12px 14px;border-left:3px solid #1B2A4A">'
         + '<p style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:6px">Canyon Alpha Signal</p>'
         + '<div style="display:flex;align-items:center;gap:12px">'
-        + '<p style="font-size:22px;font-weight:700;color:' + scolor + '">' + sig.alpha_score.toFixed(2) + '</p>'
-        + '<div style="flex:1"><div style="height:6px;background:#E2E0DC;border-radius:3px"><div style="height:100%;width:' + pct + '%;background:' + scolor + ';border-radius:3px"></div></div>'
+        + '<p style="font-size:22px;font-weight:400;color:' + scolor + '">' + sig.alpha_score.toFixed(2) + '</p>'
+        + '<div style="flex:1"><div style="height:6px;background:#241f18;border-radius:3px"><div style="height:100%;width:' + pct + '%;background:' + scolor + ';border-radius:3px"></div></div>'
         + '<p style="font-size:10px;color:#AAA;margin-top:3px">Rank #' + sig.rank + ' of ' + sig.total_stocks + ' stocks</p></div></div></div>';
     }}
 
@@ -3105,8 +3053,8 @@ var canyonQL = (function() {{
       var ucolor = upside > 0 ? '#1B6F4A' : '#B83232';
       var usign  = upside > 0 ? '+' : '';
       document.getElementById('ql-dcf').innerHTML =
-        '<div style="background:#FDF8EE;border-radius:4px;padding:12px 14px;border-left:3px solid #B8943F">'
-        + '<p style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#B8943F;margin-bottom:8px">Damodaran DCF Valuation</p>'
+        '<div style="background:#FDF8EE;border-radius:4px;padding:12px 14px;border-left:3px solid #c8b487">'
+        + '<p style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#c8b487;margin-bottom:8px">Damodaran DCF Valuation</p>'
         + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">'
         + _qlMetric('Intrinsic Value', '$' + parseFloat(dcf.iv_per_share).toFixed(2))
         + _qlMetric('Upside/Downside', (upside !== null ? usign + upside.toFixed(1) + '%' : '—'), ucolor)
@@ -3122,7 +3070,7 @@ var canyonQL = (function() {{
     // Short
     var sh = d.short;
     if (sh && sh.score) {{
-      var urgColor = sh.urgency && sh.urgency.indexOf('NOW') !== -1 ? '#B83232' : '#B8943F';
+      var urgColor = sh.urgency && sh.urgency.indexOf('NOW') !== -1 ? '#B83232' : '#c8b487';
       document.getElementById('ql-short').innerHTML =
         '<div style="background:#FEF2F2;border-radius:4px;padding:12px 14px;border-left:3px solid #B83232">'
         + '<p style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#B83232;margin-bottom:8px">Short Scanner</p>'
@@ -3144,7 +3092,7 @@ var canyonQL = (function() {{
     var ai = d.earnings_ai;
     if (ai && ai.summary && ai.summary.length > 20) {{
       document.getElementById('ql-ai').innerHTML =
-        '<div style="background:#F7F6F3;border-radius:4px;padding:12px 14px">'
+        '<div style="background:#241f18;border-radius:4px;padding:12px 14px">'
         + '<p style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:8px">'
         + 'AI Earnings Analysis' + (ai.has_ai ? ' · <span style=\\"color:#1B6F4A\\">AI</span>' : '') + '</p>'
         + '<div style="font-size:12px;color:#333;line-height:1.7;white-space:pre-wrap">' + _esc(ai.summary) + '</div>'
@@ -3170,7 +3118,7 @@ var canyonQL = (function() {{
   function _qlMetric(label, val, color) {{
     return '<div style="text-align:center;background:#fff;border-radius:3px;padding:8px 4px">'
       + '<p style="font-size:9px;color:#AAA;text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">' + label + '</p>'
-      + '<p style="font-size:12px;font-weight:700;color:' + (color || '#1B2A4A') + '">' + val + '</p></div>';
+      + '<p style="font-size:12px;font-weight:400;color:' + (color || '#1B2A4A') + '">' + val + '</p></div>';
   }}
 
   function _esc(s) {{
@@ -3222,26 +3170,26 @@ def _build_chat_section() -> str:
     #chat-sidebar {{ width:260px; flex-shrink:0 }}
     #chat-main {{ flex:1; min-width:0; display:flex; flex-direction:column }}
     #chat-messages {{
-      flex:1; background:#F7F6F3; border:1px solid #E2E0DC; border-radius:8px;
+      flex:1; background:#241f18; border:1px solid #241f18; border-radius:8px;
       padding:16px; min-height:400px; max-height:540px; overflow-y:auto;
       display:flex; flex-direction:column; gap:10px;
     }}
     #chat-form {{ display:flex; gap:8px; margin-top:10px }}
     #chat-input {{
-      flex:1; border:1px solid #C8C5BE; border-radius:6px;
+      flex:1; border:1px solid #241f18; border-radius:6px;
       padding:11px 14px; font-size:13px; outline:none; background:#fff;
       transition:border-color .15s;
     }}
     #chat-input:focus {{ border-color:#1B2A4A }}
     #chat-send {{
       background:#1B2A4A; color:#fff; border:none; padding:11px 22px;
-      border-radius:6px; cursor:pointer; font-size:13px; font-weight:700;
+      border-radius:6px; cursor:pointer; font-size:13px; font-weight:400;
       white-space:nowrap; transition:background .15s;
     }}
-    #chat-send:hover {{ background:#2D4470 }}
+    #chat-send:hover {{ background:#4a5561 }}
     #chat-send:disabled {{ background:#CCC; cursor:default }}
     #chat-clear {{
-      background:#fff; color:#999; border:1px solid #E2E0DC;
+      background:#fff; color:#999; border:1px solid #241f18;
       padding:11px 14px; border-radius:6px; cursor:pointer; font-size:12px;
     }}
     .chat-chips {{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px }}
@@ -3284,27 +3232,27 @@ def _build_chat_section() -> str:
       <!-- Sidebar -->
       <div id="chat-sidebar">
         <div class="method-card acc" style="margin-bottom:14px">
-          <p style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:#888;margin-bottom:8px;font-weight:700">Focus on Ticker</p>
+          <p style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:#888;margin-bottom:8px;font-weight:400">Focus on Ticker</p>
           <div style="position:relative">
             <input id="chat-ticker" type="text" placeholder="e.g. NVDA"
-              style="width:100%;border:1px solid #E2E0DC;padding:8px 36px 8px 10px;border-radius:4px;font-size:14px;font-weight:700;background:#fff;letter-spacing:.5px"
+              style="width:100%;border:1px solid #241f18;padding:8px 36px 8px 10px;border-radius:4px;font-size:14px;font-weight:400;background:#fff;letter-spacing:.5px"
               oninput="this.value=this.value.toUpperCase().replace(/[^A-Z]/g,'')" maxlength="6">
             <button onclick="var t=document.getElementById('chat-ticker').value;if(t)canyonQL.open(t)"
-              style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:14px;color:#B8943F" title="Quick look">🔍</button>
+              style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:14px;color:#c8b487" title="Quick look">🔍</button>
           </div>
           <p style="font-size:10px;color:#BBB;margin-top:5px">Canyon loads full signal/DCF/short/AI data for this ticker as context.</p>
         </div>
 
         <div class="method-card acc" style="margin-bottom:14px">
-          <p style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:#888;margin-bottom:8px;font-weight:700">Conversation History</p>
+          <p style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:#888;margin-bottom:8px;font-weight:400">Conversation History</p>
           <p id="chat-turn-count" style="font-size:12px;color:#666">0 messages</p>
           <button onclick="canyonChat.clear()"
-            style="margin-top:8px;width:100%;background:#fff;border:1px solid #E2E0DC;padding:7px;border-radius:4px;cursor:pointer;font-size:11px;color:#888">
+            style="margin-top:8px;width:100%;background:#fff;border:1px solid #241f18;padding:7px;border-radius:4px;cursor:pointer;font-size:11px;color:#888">
             🗑 Clear conversation</button>
         </div>
 
         <div class="method-card acc">
-          <p style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:#888;margin-bottom:8px;font-weight:700">Data Available in Context</p>
+          <p style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:#888;margin-bottom:8px;font-weight:400">Data Available in Context</p>
           <div style="display:flex;flex-direction:column;gap:4px;font-size:11px;color:#555">
             <p>✓ Alpha scores (all S&amp;P 500)</p>
             <p>✓ HMM regime + macro outlook</p>
@@ -3322,7 +3270,7 @@ def _build_chat_section() -> str:
           <div id="chat-placeholder" style="display:flex;flex-direction:column;align-items:center;
             justify-content:center;height:100%;gap:12px;color:#AAA;text-align:center">
             <p style="font-size:32px">💬</p>
-            <p style="font-size:13px;font-weight:600;color:#888">Ask Canyon anything</p>
+            <p style="font-size:13px;font-weight:400;color:#888">Ask Canyon anything</p>
             <p style="font-size:11px">Use the chips above or type a question below.<br>
                Click any ticker in the dashboard to open Quick Look, then ask AI from there.</p>
           </div>
@@ -3357,7 +3305,7 @@ def _build_chat_section() -> str:
       return text
         .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
         .replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>')
-        .replace(/`([^`]+)`/g,'<code style="background:#F0EDE8;padding:1px 4px;border-radius:3px;font-family:monospace;font-size:12px">$1</code>')
+        .replace(/`([^`]+)`/g,'<code style="background:#241f18;padding:1px 4px;border-radius:3px;font-family:monospace;font-size:12px">$1</code>')
         .replace(/\\n/g,'<br>');
     }}
 
@@ -3445,11 +3393,11 @@ def _build_chat_section() -> str:
 def _build_earnings_ai_section(df: "pd.DataFrame") -> str:
     if df is None or df.empty:
         return """
-  <div style="text-align:center;padding:40px 20px;background:#F7F6F3;border-radius:6px;border:1px dashed #E2E0DC">
+  <div style="text-align:center;padding:40px 20px;background:#241f18;border-radius:6px;border:1px dashed #241f18">
     <p style="font-size:32px;margin-bottom:12px">📋</p>
-    <p style="font-size:14px;font-weight:700;color:#555;margin-bottom:6px">Earnings AI summaries not yet generated</p>
+    <p style="font-size:14px;font-weight:400;color:#555;margin-bottom:6px">Earnings AI summaries not yet generated</p>
     <p style="font-size:12px;color:#AAA;margin-bottom:12px">
-      Run: <code style="background:#F0EDE8;padding:2px 6px;border-radius:3px">.venv/bin/python step_earnings_ai.py</code><br>
+      Run: <code style="background:#241f18;padding:2px 6px;border-radius:3px">.venv/bin/python step_earnings_ai.py</code><br>
       Requires <code>ANTHROPIC_API_KEY</code> env var for AI narratives. Runs incrementally — skips stocks already done today.
     </p>
     <p style="font-size:11px;color:#BBB">Each stock generates a 5-section Damodaran-style analysis: Business Quality, Earnings Quality, Balance Sheet, Growth Drivers, Valuation Context.</p>
@@ -3478,13 +3426,13 @@ def _build_earnings_ai_section(df: "pd.DataFrame") -> str:
             pct_pos = min(100, max(0, (v - lo) / (hi - lo) * 100))
             color = "#1B6F4A" if v >= 0 else "#B83232"
             return (f'<div style="display:flex;align-items:center;gap:6px">'
-                    f'<div style="width:{width}px;height:5px;background:#E2E0DC;border-radius:3px;flex-shrink:0">'
+                    f'<div style="width:{width}px;height:5px;background:#241f18;border-radius:3px;flex-shrink:0">'
                     f'<div style="width:{pct_pos:.0f}%;height:100%;background:{color};border-radius:3px"></div></div>'
-                    f'<span style="font-size:11px;color:{color};font-weight:700">{pct(val, True)}</span></div>')
+                    f'<span style="font-size:11px;color:{color};font-weight:400">{pct(val, True)}</span></div>')
         except: return "—"
 
     rating_colors = {"buy":"#1B6F4A","strong buy":"#1B6F4A","strong_buy":"#1B6F4A",
-                     "hold":"#B8943F","neutral":"#B8943F",
+                     "hold":"#c8b487","neutral":"#c8b487",
                      "sell":"#B83232","underperform":"#B83232"}
 
     # Group by sector for sector rank + peer percentile computation
@@ -3536,7 +3484,7 @@ def _build_earnings_ai_section(df: "pd.DataFrame") -> str:
             higher_better = col in ("rev_growth_yoy", "op_margin", "roe", "fcf_yield")
             color = "#1B6F4A" if (higher_better and v > med) or (not higher_better and v < med and v > 0) else "#B83232"
             return (f'<div title="vs {sec} sector median {med:.2f}" '
-                    f'style="position:relative;height:4px;background:#E2E0DC;border-radius:2px;margin-top:4px">'
+                    f'style="position:relative;height:4px;background:#241f18;border-radius:2px;margin-top:4px">'
                     f'<div style="position:absolute;left:0;width:{pct_pos:.0f}%;height:100%;'
                     f'background:{color};border-radius:2px;opacity:0.85"></div>'
                     f'<div style="position:absolute;left:{med_pos:.0f}%;width:2px;height:6px;top:-1px;'
@@ -3564,10 +3512,10 @@ def _build_earnings_ai_section(df: "pd.DataFrame") -> str:
                 v = float(val)
                 lbl = SIG_LABELS.get(sig, sig.replace("sig_", "").replace("_", " ").title())
                 pct_w = min(100, max(0, v))
-                color = "#1B6F4A" if v >= 65 else ("#B83232" if v <= 35 else "#B8943F")
+                color = "#1B6F4A" if v >= 65 else ("#B83232" if v <= 35 else "#c8b487")
                 bars += (f'<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">'
                          f'<span style="width:90px;font-size:9px;color:#888;flex-shrink:0">{lbl}</span>'
-                         f'<div style="flex:1;height:5px;background:#E2E0DC;border-radius:2px">'
+                         f'<div style="flex:1;height:5px;background:#241f18;border-radius:2px">'
                          f'<div style="width:{pct_w:.0f}%;height:100%;background:{color};border-radius:2px"></div></div>'
                          f'<span style="font-size:9px;color:{color};width:28px;text-align:right">{v:.0f}</span></div>')
             except Exception:
@@ -3575,7 +3523,7 @@ def _build_earnings_ai_section(df: "pd.DataFrame") -> str:
         if not bars:
             return ""
         return (f'<details style="margin-top:8px"><summary style="font-size:10px;color:#888;cursor:pointer;'
-                f'padding:4px 0;border-top:1px solid #F0EDE8">📊 Signal breakdown (top 4 drivers)</summary>'
+                f'padding:4px 0;border-top:1px solid #241f18">📊 Signal breakdown (top 4 drivers)</summary>'
                 f'<div style="padding:8px 0">{bars}</div></details>')
 
     # Sort by alpha score descending for display
@@ -3601,7 +3549,7 @@ def _build_earnings_ai_section(df: "pd.DataFrame") -> str:
         try:
             ascore = float(r.get("alpha_score", 0) or 0)
             ascore_pct = min(100, max(0, (ascore + 3) / 6 * 100))
-            ascore_color = "#1B6F4A" if ascore > 1 else ("#B83232" if ascore < -1 else "#B8943F")
+            ascore_color = "#1B6F4A" if ascore > 1 else ("#B83232" if ascore < -1 else "#c8b487")
         except Exception:
             ascore, ascore_pct, ascore_color = 0, 50, "#888"
 
@@ -3610,7 +3558,7 @@ def _build_earnings_ai_section(df: "pd.DataFrame") -> str:
         beat_badge = ""
         try:
             b = int(beats)
-            beat_badge = (f'<span style="background:#E8F5E9;color:#1B6F4A;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700">'
+            beat_badge = (f'<span style="background:#241f18;color:#1B6F4A;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:400">'
                           f'{"★" * b} {b}/4 beats</span>') if b >= 3 else ""
         except Exception:
             pass
@@ -3623,7 +3571,7 @@ def _build_earnings_ai_section(df: "pd.DataFrame") -> str:
             if t > 0 and p > 0:
                 up = (t - p) / p * 100
                 up_c = "#1B6F4A" if up > 0 else "#B83232"
-                target_upside = f'<span style="font-size:10px;color:{up_c};font-weight:700">{"↑" if up>0 else "↓"} {abs(up):.0f}% to target</span>'
+                target_upside = f'<span style="font-size:10px;color:{up_c};font-weight:400">{"↑" if up>0 else "↓"} {abs(up):.0f}% to target</span>'
         except Exception:
             pass
 
@@ -3642,9 +3590,9 @@ def _build_earnings_ai_section(df: "pd.DataFrame") -> str:
                 .replace("**", ""))
             summary_html = (
                 f'<details style="margin-top:10px">'
-                f'<summary style="font-size:11px;color:#1B2A4A;font-weight:700;cursor:pointer;'
-                f'padding:6px 0;border-top:1px solid #F0EDE8">{"🤖 AI Analysis" if has_ai else "📋 Analysis"} — click to expand</summary>'
-                f'<div style="font-size:12px;color:#444;line-height:1.7;padding:10px 0;white-space:pre-wrap;border-left:2px solid {"#E8F5E9" if has_ai else "#E2E0DC"};padding-left:12px;margin-top:8px">'
+                f'<summary style="font-size:11px;color:#1B2A4A;font-weight:400;cursor:pointer;'
+                f'padding:6px 0;border-top:1px solid #241f18">{"🤖 AI Analysis" if has_ai else "📋 Analysis"} — click to expand</summary>'
+                f'<div style="font-size:12px;color:#444;line-height:1.7;padding:10px 0;white-space:pre-wrap;border-left:2px solid {"#241f18" if has_ai else "#241f18"};padding-left:12px;margin-top:8px">'
                 f'{summary_clean}</div></details>')
 
         rows.append(f"""
@@ -3652,61 +3600,61 @@ def _build_earnings_ai_section(df: "pd.DataFrame") -> str:
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:10px">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span class="canyon-ticker-link" data-ticker="{ticker}" onclick="canyonQL.open('{ticker}')"
-          style="font-family:'Playfair Display',serif;font-size:20px;font-weight:700;color:#1B2A4A">{ticker}</span>
+          style="font-family:'Playfair Display',serif;font-size:20px;font-weight:400;color:#1B2A4A">{ticker}</span>
         <span style="font-size:11px;color:#888">{sector} · #{sec_rank}/{sec_total} sector rank</span>
-        {'<span style="font-size:9px;background:#E8F5E9;color:#1B6F4A;padding:2px 6px;border-radius:10px;font-weight:700">🤖 AI</span>' if has_ai else ''}
+        {'<span style="font-size:9px;background:#241f18;color:#1B6F4A;padding:2px 6px;border-radius:10px;font-weight:400">🤖 AI</span>' if has_ai else ''}
         {beat_badge}
       </div>
       <div style="text-align:right">
-        <span style="font-size:16px;font-weight:700;color:#1B2A4A">${num(r.get('price'), 2)}</span>
-        <span style="display:block;font-size:10px;color:{rc};font-weight:700;text-transform:uppercase;margin-top:2px">{rating}</span>
+        <span style="font-size:16px;font-weight:400;color:#1B2A4A">${num(r.get('price'), 2)}</span>
+        <span style="display:block;font-size:10px;color:{rc};font-weight:400;text-transform:uppercase;margin-top:2px">{rating}</span>
         {target_upside}
       </div>
     </div>
 
     <!-- Metric grid: 8 key metrics -->
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
-      <div style="background:#F7F6F3;border-radius:4px;padding:7px 8px">
+      <div style="background:#241f18;border-radius:4px;padding:7px 8px">
         <p style="font-size:9px;color:#AAA;text-transform:uppercase;letter-spacing:.7px;margin-bottom:2px">P/E Fwd</p>
-        <p style="font-size:13px;font-weight:700;color:#1B2A4A">{num(r.get('pe_fwd'))}x</p>
+        <p style="font-size:13px;font-weight:400;color:#1B2A4A">{num(r.get('pe_fwd'))}x</p>
         {peer_percentile_bar(r.get('pe_fwd'), sector, 'pe_fwd')}
       </div>
-      <div style="background:#F7F6F3;border-radius:4px;padding:7px 8px">
+      <div style="background:#241f18;border-radius:4px;padding:7px 8px">
         <p style="font-size:9px;color:#AAA;text-transform:uppercase;letter-spacing:.7px;margin-bottom:2px">Rev Growth YoY</p>
         {trend_bar(r.get('rev_growth_yoy'), -0.3, 0.5, 50)}
         {peer_percentile_bar(r.get('rev_growth_yoy'), sector, 'rev_growth_yoy')}
       </div>
-      <div style="background:#F7F6F3;border-radius:4px;padding:7px 8px">
+      <div style="background:#241f18;border-radius:4px;padding:7px 8px">
         <p style="font-size:9px;color:#AAA;text-transform:uppercase;letter-spacing:.7px;margin-bottom:2px">Op Margin</p>
-        <p style="font-size:13px;font-weight:700;color:#1B2A4A">{pct(r.get('op_margin'), False)}</p>
+        <p style="font-size:13px;font-weight:400;color:#1B2A4A">{pct(r.get('op_margin'), False)}</p>
         {peer_percentile_bar(r.get('op_margin'), sector, 'op_margin')}
       </div>
-      <div style="background:#F7F6F3;border-radius:4px;padding:7px 8px">
+      <div style="background:#241f18;border-radius:4px;padding:7px 8px">
         <p style="font-size:9px;color:#AAA;text-transform:uppercase;letter-spacing:.7px;margin-bottom:2px">ROE</p>
-        <p style="font-size:13px;font-weight:700;color:#1B2A4A">{pct(r.get('roe'), False)}</p>
+        <p style="font-size:13px;font-weight:400;color:#1B2A4A">{pct(r.get('roe'), False)}</p>
         {peer_percentile_bar(r.get('roe'), sector, 'roe')}
       </div>
-      <div style="background:#F7F6F3;border-radius:4px;padding:7px 8px">
+      <div style="background:#241f18;border-radius:4px;padding:7px 8px">
         <p style="font-size:9px;color:#AAA;text-transform:uppercase;letter-spacing:.7px;margin-bottom:2px">Debt/Equity</p>
-        <p style="font-size:13px;font-weight:700;color:#1B2A4A">{num(r.get('debt_equity'))}x</p>
+        <p style="font-size:13px;font-weight:400;color:#1B2A4A">{num(r.get('debt_equity'))}x</p>
       </div>
-      <div style="background:#F7F6F3;border-radius:4px;padding:7px 8px">
+      <div style="background:#241f18;border-radius:4px;padding:7px 8px">
         <p style="font-size:9px;color:#AAA;text-transform:uppercase;letter-spacing:.7px;margin-bottom:2px">EV/EBITDA</p>
-        <p style="font-size:13px;font-weight:700;color:#1B2A4A">{num(r.get('ev_ebitda'))}x</p>
+        <p style="font-size:13px;font-weight:400;color:#1B2A4A">{num(r.get('ev_ebitda'))}x</p>
         {peer_percentile_bar(r.get('ev_ebitda'), sector, 'ev_ebitda')}
       </div>
-      <div style="background:#F7F6F3;border-radius:4px;padding:7px 8px">
+      <div style="background:#241f18;border-radius:4px;padding:7px 8px">
         <p style="font-size:9px;color:#AAA;text-transform:uppercase;letter-spacing:.7px;margin-bottom:2px">Canyon Alpha</p>
         <div style="display:flex;align-items:center;gap:5px">
-          <div style="flex:1;height:5px;background:#E2E0DC;border-radius:3px">
+          <div style="flex:1;height:5px;background:#241f18;border-radius:3px">
             <div style="width:{ascore_pct:.0f}%;height:100%;background:{ascore_color};border-radius:3px"></div>
           </div>
-          <span style="font-size:11px;font-weight:700;color:{ascore_color}">{ascore:+.2f}</span>
+          <span style="font-size:11px;font-weight:400;color:{ascore_color}">{ascore:+.2f}</span>
         </div>
       </div>
-      <div style="background:#F7F6F3;border-radius:4px;padding:7px 8px">
+      <div style="background:#241f18;border-radius:4px;padding:7px 8px">
         <p style="font-size:9px;color:#AAA;text-transform:uppercase;letter-spacing:.7px;margin-bottom:2px">FCF Yield</p>
-        <p style="font-size:13px;font-weight:700;color:#1B2A4A">{pct(r.get('fcf_yield'), True)}</p>
+        <p style="font-size:13px;font-weight:400;color:#1B2A4A">{pct(r.get('fcf_yield'), True)}</p>
         {peer_percentile_bar(r.get('fcf_yield'), sector, 'fcf_yield')}
       </div>
     </div>
@@ -3718,16 +3666,23 @@ def _build_earnings_ai_section(df: "pd.DataFrame") -> str:
     ai_count = int(fresh["has_ai_summary"].sum()) if "has_ai_summary" in fresh.columns else 0
     sectors_list = "".join(f'<option value="{s}">{s}</option>' for s in sorted(sectors_seen.keys()))
 
-    header = f"""
+    # Honest banner: when the AI narrative layer is off (no ANTHROPIC_API_KEY),
+    # say so plainly. The fundamentals below are still live/real (yfinance).
+    ai_off_banner = "" if ai_count > 0 else """
+  <div style="background:#1b1710;border:1px solid #43391f;border-left:3px solid #c8b487;border-radius:6px;padding:12px 16px;margin-bottom:16px">
+    <p style="font-size:12.5px;color:#c8b487;font-weight:400;letter-spacing:.02em;margin-bottom:3px">AI narrative layer — not enabled</p>
+    <p style="font-size:12px;color:#b0a68f;line-height:1.5">The fundamentals below are <strong style="color:#f0e9da">live &amp; real</strong> (yfinance). The AI-written analysis is off because <code style="background:#241f18;padding:1px 5px;border-radius:3px;color:#cdbd8f">ANTHROPIC_API_KEY</code> is not set — no narrative is being shown or faked.</p>
+  </div>"""
+
+    header = ai_off_banner + f"""
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
     <p style="font-size:13px;color:#666;flex:1">
       <strong>{len(fresh)}</strong> stocks · <strong style="color:{'#1B6F4A' if ai_count > 0 else '#AAA'}">{ai_count} with AI narratives</strong>
-      {' · <span style="color:#BBB">Run <code>step_earnings_ai.py</code> to generate AI summaries</span>' if ai_count == 0 else ''}
     </p>
     <input id="earn-search" type="text" placeholder="🔍 Filter ticker…" oninput="earnFilter()"
-      style="border:1px solid #E2E0DC;padding:7px 10px;border-radius:4px;font-size:12px;width:150px">
+      style="border:1px solid #241f18;padding:7px 10px;border-radius:4px;font-size:12px;width:150px">
     <select id="earn-sector" onchange="earnFilter()"
-      style="border:1px solid #E2E0DC;padding:7px 10px;border-radius:4px;font-size:12px;background:#fff">
+      style="border:1px solid #241f18;padding:7px 10px;border-radius:4px;font-size:12px;background:#fff">
       <option value="">All sectors</option>
       {sectors_list}
     </select>
@@ -3764,19 +3719,19 @@ def _build_regime_gauge(hmm: str, bear_prob: float | None) -> str:
     elif hmm == "BEAR":
         zone_color, zone_text, zone_bg = "#B83232", "BEAR — Defensive", "#FEF2F2"
     else:
-        zone_color, zone_text, zone_bg = "#B8943F", "TRANSITION — Caution", "#FFFBEB"
-    needle_color = "#B83232" if prob >= 60 else ("#B8943F" if prob >= 35 else "#1B6F4A")
+        zone_color, zone_text, zone_bg = "#c8b487", "TRANSITION — Caution", "#FFFBEB"
+    needle_color = "#B83232" if prob >= 60 else ("#c8b487" if prob >= 35 else "#1B6F4A")
     return f"""
     <div style="background:{zone_bg};border:1px solid {zone_color}33;border-radius:6px;
       padding:16px 20px;display:flex;align-items:center;gap:24px;margin-bottom:20px;border-top:3px solid {zone_color}">
       <svg viewBox="0 0 200 110" width="160" height="88" style="flex-shrink:0">
         <!-- Background arc zones -->
         <path d="M 28 100 A 72 72 0 0 1 74 30" stroke="#1B6F4A" stroke-width="10" fill="none" stroke-linecap="round" opacity=".35"/>
-        <path d="M 74 30 A 72 72 0 0 1 126 30" stroke="#B8943F" stroke-width="10" fill="none" stroke-linecap="round" opacity=".35"/>
+        <path d="M 74 30 A 72 72 0 0 1 126 30" stroke="#c8b487" stroke-width="10" fill="none" stroke-linecap="round" opacity=".35"/>
         <path d="M 126 30 A 72 72 0 0 1 172 100" stroke="#B83232" stroke-width="10" fill="none" stroke-linecap="round" opacity=".35"/>
         <!-- Labels -->
         <text x="18" y="108" font-size="9" fill="#1B6F4A" font-weight="700">BULL</text>
-        <text x="92" y="22" font-size="9" fill="#B8943F" font-weight="700" text-anchor="middle">MID</text>
+        <text x="92" y="22" font-size="9" fill="#c8b487" font-weight="700" text-anchor="middle">MID</text>
         <text x="168" y="108" font-size="9" fill="#B83232" font-weight="700" text-anchor="end">BEAR</text>
         <!-- Needle -->
         <line x1="100" y1="100" x2="{nx:.1f}" y2="{ny:.1f}" stroke="{needle_color}" stroke-width="2.5" stroke-linecap="round"/>
@@ -3786,7 +3741,7 @@ def _build_regime_gauge(hmm: str, bear_prob: float | None) -> str:
       </svg>
       <div>
         <p style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:4px">Regime Gauge · 4-Week Bear Probability</p>
-        <p style="font-size:18px;font-weight:700;color:{zone_color};margin-bottom:2px">{zone_text}</p>
+        <p style="font-size:18px;font-weight:400;color:{zone_color};margin-bottom:2px">{zone_text}</p>
         <p style="font-size:12px;color:#666">Needle shows {prob:.0f}% probability of bear market in next 4 weeks.<br>
         Below 35% = lean long · 35-60% = reduce risk · Above 60% = defensive posture.</p>
       </div>
@@ -3812,20 +3767,20 @@ def _build_earnings_this_week(earnings_cal: list) -> str:
         risk = e.get("risk_flag", "")
         day_text = "TODAY" if d == 0 else ("TOMORROW" if d == 1 else f"in {d}d")
         action_color = "#1B6F4A" if "BUY" in action.upper() else ("#B83232" if "AVOID" in action.upper() else "#888")
-        risk_badge = f'<span style="background:#FEE2E2;color:#B83232;font-size:9px;padding:1px 4px;border-radius:3px;font-weight:700">⚠️ HIGH RISK</span>' if risk == "HIGH" else ""
+        risk_badge = f'<span style="background:#FEE2E2;color:#B83232;font-size:9px;padding:1px 4px;border-radius:3px;font-weight:400">⚠️ HIGH RISK</span>' if risk == "HIGH" else ""
         cards.append(f"""
-        <div onclick="canyonQL.open('{t}')" style="cursor:pointer;background:#fff;border:1px solid #E2E0DC;border-radius:4px;
-          padding:10px 12px;min-width:100px;flex-shrink:0;border-top:2px solid {'#B83232' if risk=='HIGH' else '#B8943F'};
+        <div onclick="canyonQL.open('{t}')" style="cursor:pointer;background:#fff;border:1px solid #241f18;border-radius:4px;
+          padding:10px 12px;min-width:100px;flex-shrink:0;border-top:2px solid {'#B83232' if risk=='HIGH' else '#c8b487'};
           transition:box-shadow .15s" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,.12)'" onmouseout="this.style.boxShadow=''">
-          <p style="font-size:9px;color:#B8943F;font-weight:800;text-transform:uppercase;margin-bottom:3px">{day_text}</p>
-          <p style="font-size:15px;font-weight:800;color:#1B2A4A;margin-bottom:2px">{t}</p>
-          <p style="font-size:10px;color:{action_color};font-weight:600">{action}</p>
+          <p style="font-size:9px;color:#c8b487;font-weight:500;text-transform:uppercase;margin-bottom:3px">{day_text}</p>
+          <p style="font-size:15px;font-weight:500;color:#1B2A4A;margin-bottom:2px">{t}</p>
+          <p style="font-size:10px;color:{action_color};font-weight:400">{action}</p>
           {risk_badge}
         </div>""")
     return f"""
-    <div style="background:#FDF8EE;border:1px solid #E8D8A0;border-radius:6px;padding:14px 16px;margin-bottom:20px">
+    <div style="background:#FDF8EE;border:1px solid #241f18;border-radius:6px;padding:14px 16px;margin-bottom:20px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <p style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:#B8943F;font-weight:700">
+        <p style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:#c8b487;font-weight:400">
           📅 Earnings This Week — next 7 days</p>
         <p style="font-size:10px;color:#BBB">{len(soon)} upcoming</p>
       </div>
@@ -3841,7 +3796,7 @@ def _build_congressional_section(ct: dict) -> str:
     """Deep congressional trading STOCK Act analysis — committee conflict, timing patterns, trade log."""
     if not ct or not ct.get("members"):
         return """
-<div style="border:1px solid #E2E0DC;border-radius:8px;padding:20px;background:#fff;margin-bottom:24px">
+<div style="border:1px solid #241f18;border-radius:8px;padding:20px;background:#fff;margin-bottom:24px">
   <p style="font-size:13px;color:#888">Run <code>python step_congressional_trading.py</code> to load congressional trade data.</p>
 </div>"""
 
@@ -3850,20 +3805,42 @@ def _build_congressional_section(ct: dict) -> str:
     alerts  = ct.get("conflict_alert_summary", [])
     as_of   = ct.get("as_of", "—")
 
-    PARTY_BG  = {"D": "#1565C0", "R": "#B71C1C"}
-    PARTY_LT  = {"D": "#E3F0FF", "R": "#FFEBEE"}
-    PARTY_TXT = {"D": "#0D3F8F", "R": "#7F1111"}
+    # Honest provenance: is this live, a curated fallback, and/or stale?
+    _src_raw   = str(ct.get("source", ""))
+    _is_fallbk = "fallback" in _src_raw.lower() or "blocked" in _src_raw.lower()
+    _stale_days = None
+    try:
+        import datetime as _dt
+        _stale_days = (_dt.date.today() - _dt.date.fromisoformat(str(as_of))).days
+    except Exception:
+        pass
+    _is_stale = _stale_days is not None and _stale_days >= 2
+    _src_label = ("Curated fallback (live API blocked) — public STOCK Act archives"
+                  if _is_fallbk else "STOCK Act public filings")
+    _prov_banner = ""
+    if _is_fallbk or _is_stale:
+        _bits = []
+        if _is_fallbk: _bits.append("live disclosure API is currently blocked; showing curated data from public STOCK Act archives")
+        if _is_stale:  _bits.append(f"as of {as_of}, {_stale_days} days old")
+        _prov_banner = f"""
+  <div style="background:#1b1710;border-bottom:1px solid #43391f;border-left:3px solid #c8b487;padding:10px 24px">
+    <p style="font-size:11.5px;color:#cdbd8f;letter-spacing:.02em">Data note — {' · '.join(_bits)}. Not real-time; treat as reference, not a live signal.</p>
+  </div>"""
+
+    PARTY_BG  = {"D": "#5f7480", "R": "#B71C1C"}
+    PARTY_LT  = {"D": "#202832", "R": "#FFEBEE"}
+    PARTY_TXT = {"D": "#495663", "R": "#7F1111"}
 
     # ── Conflict Alerts banner ───────────────────────────────────────────────
     alert_pills = ""
     for a in alerts[:6]:
-        ticker_col = "#B8943F"
+        ticker_col = "#c8b487"
         alert_pills += f"""
-<div style="display:inline-block;margin:3px;padding:6px 10px;background:#FFF8E6;border:1px solid #F0D080;border-radius:6px;font-size:9px;line-height:1.4">
-  <span style="font-weight:800;color:#1B2A4A">{a['member'].split()[-1]}</span>
+<div style="display:inline-block;margin:3px;padding:6px 10px;background:#FFF8E6;border:1px solid #43391f;border-radius:6px;font-size:9px;line-height:1.4">
+  <span style="font-weight:500;color:#1B2A4A">{a['member'].split()[-1]}</span>
   <span style="margin:0 4px;color:#888">→</span>
-  <span style="font-weight:800;color:{ticker_col}">{a['ticker']}</span>
-  <span style="color:#C0392B;font-weight:700;margin-left:4px">⏱ {a['lead_days']}d lead</span>
+  <span style="font-weight:500;color:{ticker_col}">{a['ticker']}</span>
+  <span style="color:#C0392B;font-weight:400;margin-left:4px">⏱ {a['lead_days']}d lead</span>
   <div style="font-size:8px;color:#666;margin-top:2px;max-width:240px">{a['event'][:60]}…</div>
 </div>"""
 
@@ -3877,22 +3854,22 @@ def _build_congressional_section(ct: dict) -> str:
 
         # Committee badges
         cmte_badges = "".join(
-            f'<span style="display:inline-block;padding:2px 7px;margin:1px;border-radius:3px;background:{lt_bg};color:{lt_txt};font-size:8px;font-weight:600">{c[:28]}</span>'
+            f'<span style="display:inline-block;padding:2px 7px;margin:1px;border-radius:3px;background:{lt_bg};color:{lt_txt};font-size:8px;font-weight:400">{c[:28]}</span>'
             for c in m.get("committees", [])
         )
 
         # Conflict tickers
         conflict_badges = "".join(
-            f'<span style="display:inline-block;padding:1px 5px;margin:1px;border-radius:20px;background:#FFF3E0;color:#E65100;font-size:8px;font-weight:700">{tk}</span>'
+            f'<span style="display:inline-block;padding:1px 5px;margin:1px;border-radius:20px;background:#FFF3E0;color:#E65100;font-size:8px;font-weight:400">{tk}</span>'
             for tk in m.get("conflict_tickers", [])[:7]
         )
 
         # Sector breakdown mini-bars
         sector_bars = ""
         for sec, pct in sorted(m.get("sector_breakdown", {}).items(), key=lambda x: -x[1])[:4]:
-            sec_col = {"Technology":"#1565C0","Defense":"#8B3A3A","Energy":"#8B6914",
-                       "Defense/Industrials":"#8B3A3A","Semiconductors":"#5B2D8E",
-                       "Financials":"#195A6E","Enterprise Cloud":"#1A6B3C"}.get(sec, "#888")
+            sec_col = {"Technology":"#5f7480","Defense":"#8B3A3A","Energy":"#8B6914",
+                       "Defense/Industrials":"#8B3A3A","Semiconductors":"#5a5470",
+                       "Financials":"#4c5f65","Enterprise Cloud":"#1A6B3C"}.get(sec, "#888")
             sector_bars += f"""
 <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
   <div style="width:100px;font-size:8px;color:#555;text-align:right;flex-shrink:0">{sec[:16]}</div>
@@ -3904,12 +3881,12 @@ def _build_congressional_section(ct: dict) -> str:
 
         # Top buys/sells
         buy_pills = " ".join(
-            f'<span style="display:inline-block;padding:2px 6px;border-radius:20px;background:#E8F5E9;color:#1B7A3B;font-size:9px;font-weight:700;margin:1px">{tk} <span style="opacity:.7">${v:,.0f}K</span></span>'
+            f'<span style="display:inline-block;padding:2px 6px;border-radius:20px;background:#241f18;color:#1B7A3B;font-size:9px;font-weight:400;margin:1px">{tk} <span style="opacity:.7">${v:,.0f}K</span></span>'
             for tk, v in (m.get("top_buys") or [])[:5]
         ) or "—"
 
         sell_pills = " ".join(
-            f'<span style="display:inline-block;padding:2px 6px;border-radius:20px;background:#FFEBEE;color:#C0392B;font-size:9px;font-weight:700;margin:1px">{tk} <span style="opacity:.7">${v:,.0f}K</span></span>'
+            f'<span style="display:inline-block;padding:2px 6px;border-radius:20px;background:#FFEBEE;color:#C0392B;font-size:9px;font-weight:400;margin:1px">{tk} <span style="opacity:.7">${v:,.0f}K</span></span>'
             for tk, v in (m.get("top_sells") or [])[:4]
         ) or "—"
 
@@ -3923,17 +3900,17 @@ def _build_congressional_section(ct: dict) -> str:
             dt_time = dt[11:16] if len(dt) > 10 else ""
             ctx = t.get("context", "")[:55]
             trade_rows += f"""
-<tr style="border-bottom:1px solid #F0F0F0">
+<tr style="border-bottom:1px solid #241f18">
   <td style="padding:5px 6px;white-space:nowrap">
-    <div style="font-weight:800;font-size:11px;color:#1B2A4A">{t.get('ticker','')}</div>
+    <div style="font-weight:500;font-size:11px;color:#1B2A4A">{t.get('ticker','')}</div>
   </td>
   <td style="padding:5px 6px">
-    <span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;
-      background:{'#E8F5E9' if t.get('action')=='BUY' else '#FFEBEE'};color:{act_col}">{t.get('action','')}</span>
+    <span style="font-size:9px;font-weight:400;padding:1px 5px;border-radius:3px;
+      background:{'#241f18' if t.get('action')=='BUY' else '#FFEBEE'};color:{act_col}">{t.get('action','')}</span>
   </td>
   <td style="padding:5px 6px;font-size:9px;color:#444;font-variant-numeric:tabular-nums;white-space:nowrap">{t.get('amount','')[:20]}</td>
   <td style="padding:5px 6px;white-space:nowrap">
-    <div style="font-size:9px;font-weight:700;color:#1B2A4A">{dt_date}</div>
+    <div style="font-size:9px;font-weight:400;color:#1B2A4A">{dt_date}</div>
     <div style="font-size:8px;color:#888">{dt_time} ET</div>
   </td>
   <td style="padding:5px 6px;font-size:8px;color:#555;max-width:200px">{ctx}{'…' if len(t.get('context',''))>55 else ''}</td>
@@ -3945,17 +3922,17 @@ def _build_congressional_section(ct: dict) -> str:
         # Alpha badge
         alpha = m.get("est_alpha_vs_spy", "")
         alpha_col = "#1B7A3B" if alpha.startswith("+") else "#C0392B"
-        alpha_badge = f'<span style="font-size:10px;font-weight:700;color:{alpha_col}">{alpha} vs SPY</span>' if alpha else ""
+        alpha_badge = f'<span style="font-size:10px;font-weight:400;color:{alpha_col}">{alpha} vs SPY</span>' if alpha else ""
 
         member_cards += f"""
-<div style="border:1px solid #E2E0DC;border-radius:10px;overflow:hidden;background:#fff;
+<div style="border:1px solid #241f18;border-radius:10px;overflow:hidden;background:#fff;
   box-shadow:0 2px 6px rgba(0,0,0,.06)">
 
   <!-- Member header -->
   <div style="background:{hdr_bg};color:#fff;padding:14px 18px">
     <div style="display:flex;align-items:center;justify-content:space-between">
       <div>
-        <div style="font-size:14px;font-weight:800">{name}</div>
+        <div style="font-size:14px;font-weight:500">{name}</div>
         <div style="font-size:10px;opacity:.75;margin-top:2px">{m.get('chamber','?')} · {m.get('state','?')} · {m.get('n_trades',0)} disclosed trades</div>
       </div>
       <div style="text-align:right">
@@ -3968,27 +3945,27 @@ def _build_congressional_section(ct: dict) -> str:
   </div>
 
   <!-- Body: 2-column -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #F0F0F0">
+  <div style="display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #241f18">
 
     <!-- Left: Committee context + conflict analysis -->
-    <div style="padding:12px 14px;border-right:1px solid #F0F0F0">
-      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:6px">Information Advantage Analysis</div>
+    <div style="padding:12px 14px;border-right:1px solid #241f18">
+      <div style="font-size:9px;font-weight:400;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:6px">Information Advantage Analysis</div>
       <div style="font-size:10px;color:#333;line-height:1.55;margin-bottom:10px;padding:8px;background:#FAFAFA;border-radius:4px;border-left:3px solid {hdr_bg}">{m.get('committee_context','')[:220]}{'…' if len(m.get('committee_context',''))>220 else ''}</div>
-      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#E65100;margin-bottom:4px">Conflict-of-Interest Tickers</div>
+      <div style="font-size:9px;font-weight:400;text-transform:uppercase;letter-spacing:.8px;color:#E65100;margin-bottom:4px">Conflict-of-Interest Tickers</div>
       <div style="margin-bottom:10px">{conflict_badges or '<span style="font-size:9px;color:#aaa">None flagged</span>'}</div>
-      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px">Trading Pattern</div>
-      <div style="font-size:9px;color:#555;line-height:1.5;padding:6px 8px;background:#FFFBF0;border-radius:4px;border:1px solid #F0E0A0">{m.get('pattern_context','')[:180]}{'…' if len(m.get('pattern_context',''))>180 else ''}</div>
+      <div style="font-size:9px;font-weight:400;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px">Trading Pattern</div>
+      <div style="font-size:9px;color:#555;line-height:1.5;padding:6px 8px;background:#FFFBF0;border-radius:4px;border:1px solid #43391f">{m.get('pattern_context','')[:180]}{'…' if len(m.get('pattern_context',''))>180 else ''}</div>
       <div style="margin-top:8px;font-size:9px;color:#888">🏆 {m.get('top_known_win','')[:80]}</div>
       <div style="margin-top:4px;font-size:8px;color:#aaa">Disclosure lag: {m.get('trade_lag_days','—')}</div>
     </div>
 
     <!-- Right: Holdings + sector breakdown -->
     <div style="padding:12px 14px">
-      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px">Top Buys (cumulative $K)</div>
+      <div style="font-size:9px;font-weight:400;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px">Top Buys (cumulative $K)</div>
       <div style="margin-bottom:10px;line-height:1.8">{buy_pills}</div>
-      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#C0392B;margin-bottom:4px">Top Sells</div>
+      <div style="font-size:9px;font-weight:400;text-transform:uppercase;letter-spacing:.8px;color:#C0392B;margin-bottom:4px">Top Sells</div>
       <div style="margin-bottom:10px;line-height:1.8">{sell_pills}</div>
-      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:6px">Sector Breakdown</div>
+      <div style="font-size:9px;font-weight:400;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:6px">Sector Breakdown</div>
       {sector_bars}
     </div>
 
@@ -3996,7 +3973,7 @@ def _build_congressional_section(ct: dict) -> str:
 
   <!-- Trade log with context -->
   <div style="overflow-x:auto">
-    <div style="padding:8px 14px 4px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888">Recent Trade Log — timestamp, amount, congressional context</div>
+    <div style="padding:8px 14px 4px;font-size:9px;font-weight:400;text-transform:uppercase;letter-spacing:.8px;color:#888">Recent Trade Log — timestamp, amount, congressional context</div>
     <table style="width:100%;border-collapse:collapse;min-width:600px">
       <thead>
         <tr style="background:#FAFAFA">
@@ -4017,32 +3994,32 @@ def _build_congressional_section(ct: dict) -> str:
     hot_rows = ""
     for h in hot[:10]:
         cx_star = "★" if h.get("canyon_owns") else ""
-        cx_col  = "color:#1B7A3B;font-weight:700" if h.get("canyon_owns") else "color:#ccc"
+        cx_col  = "color:#1B7A3B;font-weight:400" if h.get("canyon_owns") else "color:#ccc"
         avg_ld  = h.get("avg_lead_days", 0)
-        ld_col  = "#C0392B" if avg_ld >= 15 else ("#B8943F" if avg_ld >= 7 else "#888")
+        ld_col  = "#C0392B" if avg_ld >= 15 else ("#c8b487" if avg_ld >= 7 else "#888")
         hot_context = h.get("context","")[:70]
         hot_rows += f"""
-<tr style="border-bottom:1px solid #F0F0F0">
-  <td style="padding:6px 8px;font-weight:800;font-size:12px;color:#1B2A4A;white-space:nowrap">{h['ticker']}</td>
+<tr style="border-bottom:1px solid #241f18">
+  <td style="padding:6px 8px;font-weight:500;font-size:12px;color:#1B2A4A;white-space:nowrap">{h['ticker']}</td>
   <td style="padding:6px 8px;font-size:11px;text-align:center;font-variant-numeric:tabular-nums">{h.get('n_members',0)}</td>
   <td style="padding:6px 8px;font-size:11px;text-align:center;font-variant-numeric:tabular-nums">{h.get('n_trades',0)}</td>
-  <td style="padding:6px 8px;font-size:10px;font-weight:700;color:{ld_col}">{f'{avg_ld}d' if avg_ld else '—'}</td>
+  <td style="padding:6px 8px;font-size:10px;font-weight:400;color:{ld_col}">{f'{avg_ld}d' if avg_ld else '—'}</td>
   <td style="padding:6px 8px;font-size:8px;color:#555;max-width:180px">{hot_context}{'…' if len(h.get('context',''))>70 else ''}</td>
   <td style="padding:6px 8px;font-size:12px;{cx_col}">{cx_star}</td>
 </tr>"""
 
     return f"""
-<div style="border:1px solid #E2E0DC;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.08)">
+<div style="border:1px solid #241f18;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.08)">
 
   <!-- Header -->
-  <div style="background:linear-gradient(135deg,#1B2A4A 0%,#2E4A7A 100%);color:#fff;padding:18px 24px">
+  <div style="background:linear-gradient(135deg,#1B2A4A 0%,#4a5561 100%);color:#fff;padding:18px 24px">
     <div style="display:flex;align-items:center;gap:16px">
       <span style="font-size:28px">🏛️</span>
       <div>
-        <div style="font-size:16px;font-weight:800;letter-spacing:.3px">Congressional Trading — STOCK Act Deep Analysis</div>
+        <div style="font-size:16px;font-weight:500;letter-spacing:.3px">Congressional Trading — STOCK Act Deep Analysis</div>
         <div style="font-size:10px;opacity:.7;margin-top:3px">
           {len(members)} members · {sum(m.get('n_trades',0) for m in members.values())} total disclosed trades
-          · Data as of {as_of} · Source: STOCK Act public filings
+          · Data as of {as_of} · Source: {_src_label}
         </div>
       </div>
       <div style="margin-left:auto;text-align:right;font-size:10px;opacity:.6">
@@ -4050,11 +4027,12 @@ def _build_congressional_section(ct: dict) -> str:
       </div>
     </div>
   </div>
+  {_prov_banner}
 
   <!-- Conflict Alerts -->
   {f"""
-  <div style="padding:14px 20px;background:#FFFBF0;border-bottom:1px solid #F0E0A0">
-    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#B8943F;margin-bottom:8px">
+  <div style="padding:14px 20px;background:#FFFBF0;border-bottom:1px solid #43391f">
+    <div style="font-size:9px;font-weight:400;text-transform:uppercase;letter-spacing:1px;color:#c8b487;margin-bottom:8px">
       ⚠ Conflict-of-Interest Alerts — Trade preceded public event by significant lead time
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:4px">{alert_pills}</div>
@@ -4070,7 +4048,7 @@ def _build_congressional_section(ct: dict) -> str:
 
   <!-- Congress-wide hot tickers -->
   <div style="padding:0 20px 20px">
-    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:8px">Most-Bought Tickers Across All Tracked Members</div>
+    <div style="font-size:10px;font-weight:400;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:8px">Most-Bought Tickers Across All Tracked Members</div>
     <div style="overflow-x:auto">
       <table style="width:100%;border-collapse:collapse;min-width:600px">
         <thead>
@@ -4112,15 +4090,15 @@ def _build_sector_planet_map() -> str:
     canyon_json = _json_pm.dumps(canyon_raw)
 
     return f"""
-<div style="background:#0D1B35;border-radius:12px;padding:22px 26px 18px;margin-bottom:28px;position:relative;overflow:visible">
+<div style="background:#231a12;border-radius:12px;padding:22px 26px 18px;margin-bottom:28px;position:relative;overflow:visible">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
     <div>
-      <p style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#B8943F;margin:0 0 3px">S&P 500 Sector Intelligence — Interactive Planet Map</p>
-      <h3 style="color:#fff;font-family:'Playfair Display',serif;font-size:19px;margin:0;font-weight:600">AI &amp; Compute · Robotics · Energy · Healthcare · Financials — with Logical Connections</h3>
+      <p style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#c8b487;margin:0 0 3px">S&P 500 Sector Intelligence — Interactive Planet Map</p>
+      <h3 style="color:#fff;font-family:'Playfair Display',serif;font-size:19px;margin:0;font-weight:400">AI &amp; Compute · Robotics · Energy · Healthcare · Financials — with Logical Connections</h3>
     </div>
     <div style="font-size:10px;color:rgba(255,255,255,.4);text-align:right;flex-shrink:0;padding-left:16px">
       <div>Hover any node for deep detail</div>
-      <div style="color:#B8943F;margin-top:2px">★ = Canyon signal active</div>
+      <div style="color:#c8b487;margin-top:2px">★ = Canyon signal active</div>
     </div>
   </div>
 
@@ -4129,7 +4107,7 @@ def _build_sector_planet_map() -> str:
       style="width:100%;height:auto;display:block;border-radius:8px;cursor:crosshair"></canvas>
     <div id="sp-planet-tip"
       style="display:none;position:absolute;background:rgba(10,20,46,.97);
-             border:1px solid #B8943F;border-radius:8px;padding:12px 16px;
+             border:1px solid #c8b487;border-radius:8px;padding:12px 16px;
              color:#fff;font-size:12px;line-height:1.7;pointer-events:none;
              max-width:240px;z-index:99;box-shadow:0 4px 24px rgba(0,0,0,.5)">
     </div>
@@ -4138,7 +4116,7 @@ def _build_sector_planet_map() -> str:
   <div style="display:flex;flex-wrap:wrap;gap:20px;margin-top:12px">
     <div style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border-radius:50%;background:#1B6F4A;display:inline-block"></span><span style="font-size:11px;color:rgba(255,255,255,.55)">Outperforming SPY YTD</span></div>
     <div style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border-radius:50%;background:#7A2020;display:inline-block"></span><span style="font-size:11px;color:rgba(255,255,255,.55)">Underperforming SPY YTD</span></div>
-    <div style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border-radius:50%;background:#B8943F;display:inline-block"></span><span style="font-size:11px;color:rgba(255,255,255,.55)">Canyon ★ active signal</span></div>
+    <div style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border-radius:50%;background:#c8b487;display:inline-block"></span><span style="font-size:11px;color:rgba(255,255,255,.55)">Canyon ★ active signal</span></div>
     <div style="display:flex;align-items:center;gap:6px"><span style="border-top:1px dashed rgba(255,255,255,.4);width:22px;display:inline-block"></span><span style="font-size:11px;color:rgba(255,255,255,.55)">Logic connection</span></div>
   </div>
 </div>
@@ -4332,7 +4310,7 @@ def _build_sector_planet_map() -> str:
     ctx.fillStyle=grd; ctx.fill();
     // Sun disk
     ctx.beginPath(); ctx.arc(CX,CY,SUN_R,0,Math.PI*2);
-    ctx.fillStyle='#B8943F'; ctx.fill();
+    ctx.fillStyle='#c8b487'; ctx.fill();
     ctx.strokeStyle='rgba(255,255,255,0.22)'; ctx.lineWidth=2; ctx.stroke();
     // Text
     ctx.textAlign='center'; ctx.textBaseline='middle';
@@ -4381,7 +4359,7 @@ def _build_sector_planet_map() -> str:
         var mr = isSt ? MOON_R*1.3 : MOON_R;
         // Color logic
         var fc;
-        if(st.canyon>0.55) fc='#B8943F';
+        if(st.canyon>0.55) fc='#c8b487';
         else if(st.ytd>0.10) fc='#1B6F4A';
         else if(st.ytd>-0.05) fc='#2A5A3A';
         else fc='#7A2020';
@@ -4447,12 +4425,12 @@ def _build_sector_planet_map() -> str:
           found=true; hovSt=st; hovered=s;
           var ytdStr=(st.ytd>=0?'+':'')+Math.round(st.ytd*100)+'%';
           var ytdClr=st.ytd>=0?'#6BCCA0':'#E06060';
-          var canyonLine=st.canyon>0.4?'<div style="margin-top:7px;padding:5px 8px;background:rgba(184,148,63,0.15);border-left:2px solid #B8943F;border-radius:3px"><span style="color:#B8943F;font-size:10px">Canyon ★ Signal: <strong>'+(st.canyon*100).toFixed(0)+'% conviction</strong></span></div>':'';
+          var canyonLine=st.canyon>0.4?'<div style="margin-top:7px;padding:5px 8px;background:rgba(184,148,63,0.15);border-left:2px solid #c8b487;border-radius:3px"><span style="color:#c8b487;font-size:10px">Canyon ★ Signal: <strong>'+(st.canyon*100).toFixed(0)+'% conviction</strong></span></div>':'';
           showTip(p.x,p.y,
             '<div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:'+s.color+';margin-bottom:5px">'+s.label+'</div>'+
-            '<div style="font-size:15px;font-weight:700;margin-bottom:2px">'+st.t+'</div>'+
+            '<div style="font-size:15px;font-weight:400;margin-bottom:2px">'+st.t+'</div>'+
             '<div style="font-size:11px;color:#aaa;margin-bottom:5px">'+st.name+'</div>'+
-            '<div style="font-size:12px;color:'+ytdClr+';font-weight:700">'+ytdStr+' YTD vs SPY</div>'+
+            '<div style="font-size:12px;color:'+ytdClr+';font-weight:400">'+ytdStr+' YTD vs SPY</div>'+
             '<div style="font-size:11px;color:#ccc;margin-top:7px;line-height:1.65">'+st.note+'</div>'+
             canyonLine
           );
@@ -4467,7 +4445,7 @@ def _build_sector_planet_map() -> str:
           found=true; hovered=s;
           var stList=s.stocks.map(function(st){{return '<span style="display:inline-block;margin:2px 3px;padding:1px 5px;background:'+s.color+'33;border-radius:3px;font-size:10px">'+st.t+'</span>';}}).join('');
           showTip(p.x,p.y,
-            '<div style="font-size:14px;font-weight:700;color:'+s.color+';margin-bottom:5px">'+s.emoji+' '+s.label+'</div>'+
+            '<div style="font-size:14px;font-weight:400;color:'+s.color+';margin-bottom:5px">'+s.emoji+' '+s.label+'</div>'+
             '<div style="font-size:11px;color:#ccc;line-height:1.65;margin-bottom:8px">'+s.desc+'</div>'+
             '<div style="font-size:10px;color:#888;margin-bottom:5px">'+s.layer+'</div>'+
             '<div style="margin-top:5px">'+stList+'</div>'
@@ -4480,7 +4458,7 @@ def _build_sector_planet_map() -> str:
       if(Math.sqrt(dx*dx+dy*dy)<SUN_R+5) {{
         found=true;
         showTip(p.x,p.y,
-          '<div style="font-size:14px;font-weight:700;color:#B8943F;margin-bottom:6px">S&P 500 — The Universe</div>'+
+          '<div style="font-size:14px;font-weight:400;color:#c8b487;margin-bottom:6px">S&P 500 — The Universe</div>'+
           '<div style="font-size:11px;color:#ccc;line-height:1.65">503 companies · $46T market cap<br>5 key theme sectors shown with logical connections between them</div>'+
           '<div style="font-size:10px;color:#888;margin-top:8px">Hover any planet or stock for detail</div>'
         );
@@ -4523,25 +4501,25 @@ def _build_flow_tab(options_flow: dict, etf_flow: dict, econ_cal: dict) -> str:
         pct = min(100, abs(val) / max_abs * 50)
         col = "#1B6F4A" if val >= 0 else "#B83232"
         if val >= 0:
-            return f'<div style="display:flex;align-items:center;gap:6px"><div style="width:50%;text-align:right"><div style="height:12px;background:{col};border-radius:2px;width:{pct:.0f}%;margin-left:auto"></div></div><span style="font-size:12px;font-weight:700;color:{col};width:52px">{val:+.2f}%</span><div style="width:50%"></div></div>'
+            return f'<div style="display:flex;align-items:center;gap:6px"><div style="width:50%;text-align:right"><div style="height:12px;background:{col};border-radius:2px;width:{pct:.0f}%;margin-left:auto"></div></div><span style="font-size:12px;font-weight:400;color:{col};width:52px">{val:+.2f}%</span><div style="width:50%"></div></div>'
         else:
-            return f'<div style="display:flex;align-items:center;gap:6px"><div style="width:50%"></div><span style="font-size:12px;font-weight:700;color:{col};width:52px;text-align:right">{val:+.2f}%</span><div style="width:50%;text-align:left"><div style="height:12px;background:{col};border-radius:2px;width:{pct:.0f}%"></div></div></div>'
+            return f'<div style="display:flex;align-items:center;gap:6px"><div style="width:50%"></div><span style="font-size:12px;font-weight:400;color:{col};width:52px;text-align:right">{val:+.2f}%</span><div style="width:50%;text-align:left"><div style="height:12px;background:{col};border-radius:2px;width:{pct:.0f}%"></div></div></div>'
 
     etf_rows = ""
     for s in sectors:
         flow = s.get("flow_signal", "NEUTRAL")
         flow_col = "#1B6F4A" if flow == "INFLOW" else ("#B83232" if flow == "OUTFLOW" else "#999")
-        flow_bg  = "#EAF5EE" if flow == "INFLOW" else ("#FEF0EF" if flow == "OUTFLOW" else "#F7F6F3")
+        flow_bg  = "#EAF5EE" if flow == "INFLOW" else ("#FEF0EF" if flow == "OUTFLOW" else "#241f18")
         is_spy   = s["etf"] in ("SPY", "QQQ")
-        row_style = 'border-top:2px solid #E2E0DC;font-style:italic' if is_spy else ''
+        row_style = 'border-top:2px solid #241f18;font-style:italic' if is_spy else ''
         etf_rows += f"""<tr style="{row_style}">
-          <td style="padding:7px 8px;font-weight:700;font-size:12px;color:#1B2A4A">{_esc(s['etf'])}</td>
+          <td style="padding:7px 8px;font-weight:400;font-size:12px;color:#1B2A4A">{_esc(s['etf'])}</td>
           <td style="padding:7px 8px;font-size:11.5px;color:#555">{_esc(s['name'])}</td>
           <td style="padding:7px 8px">{_ret_bar(s['ret_1d'])}</td>
           <td style="padding:7px 8px">{_ret_bar(s['ret_5d'])}</td>
           <td style="padding:7px 8px">{_ret_bar(s['ret_1m'])}</td>
           <td style="padding:7px 8px">{_ret_bar(s['ret_3m'])}</td>
-          <td style="padding:7px 8px;text-align:center"><span style="font-size:10px;font-weight:700;color:{flow_col};background:{flow_bg};padding:2px 7px;border-radius:3px">{flow}</span></td>
+          <td style="padding:7px 8px;text-align:center"><span style="font-size:10px;font-weight:400;color:{flow_col};background:{flow_bg};padding:2px 7px;border-radius:3px">{flow}</span></td>
         </tr>"""
 
     if not etf_rows:
@@ -4549,14 +4527,14 @@ def _build_flow_tab(options_flow: dict, etf_flow: dict, econ_cal: dict) -> str:
 
     etf_panel = f"""<div style="overflow-x:auto">
       <table style="width:100%;border-collapse:collapse;font-size:12px">
-        <thead><tr style="background:#F7F6F3;border-bottom:2px solid #E2E0DC">
-          <th style="padding:8px;text-align:left;font-size:10px;color:#888;font-weight:700;letter-spacing:.5px">ETF</th>
-          <th style="padding:8px;text-align:left;font-size:10px;color:#888;font-weight:700;letter-spacing:.5px">Sector</th>
-          <th style="padding:8px;text-align:center;font-size:10px;color:#888;font-weight:700;letter-spacing:.5px">1 Day</th>
-          <th style="padding:8px;text-align:center;font-size:10px;color:#888;font-weight:700;letter-spacing:.5px">5 Day</th>
-          <th style="padding:8px;text-align:center;font-size:10px;color:#888;font-weight:700;letter-spacing:.5px">1 Month</th>
-          <th style="padding:8px;text-align:center;font-size:10px;color:#888;font-weight:700;letter-spacing:.5px">3 Month</th>
-          <th style="padding:8px;text-align:center;font-size:10px;color:#888;font-weight:700;letter-spacing:.5px">Flow Signal</th>
+        <thead><tr style="background:#241f18;border-bottom:2px solid #241f18">
+          <th style="padding:8px;text-align:left;font-size:10px;color:#888;font-weight:400;letter-spacing:.5px">ETF</th>
+          <th style="padding:8px;text-align:left;font-size:10px;color:#888;font-weight:400;letter-spacing:.5px">Sector</th>
+          <th style="padding:8px;text-align:center;font-size:10px;color:#888;font-weight:400;letter-spacing:.5px">1 Day</th>
+          <th style="padding:8px;text-align:center;font-size:10px;color:#888;font-weight:400;letter-spacing:.5px">5 Day</th>
+          <th style="padding:8px;text-align:center;font-size:10px;color:#888;font-weight:400;letter-spacing:.5px">1 Month</th>
+          <th style="padding:8px;text-align:center;font-size:10px;color:#888;font-weight:400;letter-spacing:.5px">3 Month</th>
+          <th style="padding:8px;text-align:center;font-size:10px;color:#888;font-weight:400;letter-spacing:.5px">Flow Signal</th>
         </tr></thead>
         <tbody>{etf_rows}</tbody>
       </table>
@@ -4577,15 +4555,15 @@ def _build_flow_tab(options_flow: dict, etf_flow: dict, econ_cal: dict) -> str:
         side_bg  = "#EAF5EE" if side == "CALL" else "#FEF0EF"
         prem = f.get("premium_est", 0)
         prem_str = f"${prem/1_000:.0f}K" if prem < 1_000_000 else f"${prem/1_000_000:.1f}M"
-        flow_rows += f"""<tr style="border-bottom:1px solid #F2F1EE">
-          <td style="padding:7px 8px;font-weight:700;font-size:12px;color:#1B2A4A">{_esc(f.get('ticker',''))}</td>
-          <td style="padding:7px 8px"><span style="font-size:10px;font-weight:800;color:{side_col};background:{side_bg};padding:2px 8px;border-radius:3px;letter-spacing:.5px">{side}</span></td>
+        flow_rows += f"""<tr style="border-bottom:1px solid #241f18">
+          <td style="padding:7px 8px;font-weight:400;font-size:12px;color:#1B2A4A">{_esc(f.get('ticker',''))}</td>
+          <td style="padding:7px 8px"><span style="font-size:10px;font-weight:500;color:{side_col};background:{side_bg};padding:2px 8px;border-radius:3px;letter-spacing:.5px">{side}</span></td>
           <td style="padding:7px 8px;font-size:12px;color:#555">${_esc(str(f.get('strike','')))}</td>
-          <td style="padding:7px 8px;font-size:11px;color:#888">{_esc(f.get('expiry',''))} <span style="color:#B8943F">({f.get('days_to_exp','?')}d)</span></td>
-          <td style="padding:7px 8px;font-size:12px;font-weight:700;color:#1B2A4A;font-variant-numeric:tabular-nums">{f.get('volume',0):,}</td>
+          <td style="padding:7px 8px;font-size:11px;color:#888">{_esc(f.get('expiry',''))} <span style="color:#c8b487">({f.get('days_to_exp','?')}d)</span></td>
+          <td style="padding:7px 8px;font-size:12px;font-weight:400;color:#1B2A4A;font-variant-numeric:tabular-nums">{f.get('volume',0):,}</td>
           <td style="padding:7px 8px;font-size:11px;color:#999">{f.get('open_interest',0):,}</td>
-          <td style="padding:7px 8px;font-size:12px;font-weight:700;color:#B8943F">{f.get('vol_oi_ratio',0):.1f}×</td>
-          <td style="padding:7px 8px;font-size:12px;font-weight:700;color:{side_col}">{prem_str}</td>
+          <td style="padding:7px 8px;font-size:12px;font-weight:400;color:#c8b487">{f.get('vol_oi_ratio',0):.1f}×</td>
+          <td style="padding:7px 8px;font-size:12px;font-weight:400;color:{side_col}">{prem_str}</td>
           <td style="padding:7px 8px;font-size:11px;color:#999">{f.get('iv',0)*100:.0f}%</td>
         </tr>"""
 
@@ -4597,13 +4575,13 @@ def _build_flow_tab(options_flow: dict, etf_flow: dict, econ_cal: dict) -> str:
     for s in sentiments[:12]:
         bias = s.get("bias","NEUTRAL")
         chip_col = "#1B6F4A" if bias == "BULLISH" else ("#B83232" if bias == "BEARISH" else "#999")
-        chip_bg  = "#EAF5EE" if bias == "BULLISH" else ("#FEF0EF" if bias == "BEARISH" else "#F7F6F3")
+        chip_bg  = "#EAF5EE" if bias == "BULLISH" else ("#FEF0EF" if bias == "BEARISH" else "#241f18")
         call_pct = s.get("call_pct", 50)
         prem_tot = s.get("total_prem", 0)
         prem_str = f"${prem_tot/1000:.0f}K" if prem_tot < 1_000_000 else f"${prem_tot/1_000_000:.1f}M"
         sent_chips += f"""<div style="display:flex;flex-direction:column;align-items:center;padding:10px 12px;background:{chip_bg};border:1px solid {chip_col}33;border-radius:8px;min-width:80px">
-          <span style="font-size:13px;font-weight:800;color:#1B2A4A">{_esc(s['ticker'])}</span>
-          <span style="font-size:10px;font-weight:700;color:{chip_col};margin-top:2px">{bias}</span>
+          <span style="font-size:13px;font-weight:500;color:#1B2A4A">{_esc(s['ticker'])}</span>
+          <span style="font-size:10px;font-weight:400;color:{chip_col};margin-top:2px">{bias}</span>
           <div style="width:60px;height:6px;background:#EEE;border-radius:3px;margin-top:4px;overflow:hidden">
             <div style="height:6px;background:#1B6F4A;border-radius:3px;width:{call_pct:.0f}%"></div>
           </div>
@@ -4616,18 +4594,18 @@ def _build_flow_tab(options_flow: dict, etf_flow: dict, econ_cal: dict) -> str:
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">{sent_chips}</div>
       <p style="font-size:11px;color:#AAA;margin-bottom:10px">Sentiment bar = Call % of premium. Green = bullish money, red = bearish.</p>
     </div>
-    <div style="overflow-x:auto;border:1px solid #E2E0DC;border-radius:6px">
+    <div style="overflow-x:auto;border:1px solid #241f18;border-radius:6px">
       <table style="width:100%;border-collapse:collapse">
-        <thead><tr style="background:#F7F6F3;border-bottom:2px solid #E2E0DC">
-          <th style="padding:8px;text-align:left;font-size:10px;color:#888;font-weight:700">Ticker</th>
-          <th style="padding:8px;text-align:left;font-size:10px;color:#888;font-weight:700">Side</th>
-          <th style="padding:8px;text-align:left;font-size:10px;color:#888;font-weight:700">Strike</th>
-          <th style="padding:8px;text-align:left;font-size:10px;color:#888;font-weight:700">Expiry</th>
-          <th style="padding:8px;text-align:right;font-size:10px;color:#888;font-weight:700">Volume</th>
-          <th style="padding:8px;text-align:right;font-size:10px;color:#888;font-weight:700">OI</th>
-          <th style="padding:8px;text-align:right;font-size:10px;color:#888;font-weight:700">Vol/OI</th>
-          <th style="padding:8px;text-align:right;font-size:10px;color:#888;font-weight:700">Premium</th>
-          <th style="padding:8px;text-align:right;font-size:10px;color:#888;font-weight:700">IV</th>
+        <thead><tr style="background:#241f18;border-bottom:2px solid #241f18">
+          <th style="padding:8px;text-align:left;font-size:10px;color:#888;font-weight:400">Ticker</th>
+          <th style="padding:8px;text-align:left;font-size:10px;color:#888;font-weight:400">Side</th>
+          <th style="padding:8px;text-align:left;font-size:10px;color:#888;font-weight:400">Strike</th>
+          <th style="padding:8px;text-align:left;font-size:10px;color:#888;font-weight:400">Expiry</th>
+          <th style="padding:8px;text-align:right;font-size:10px;color:#888;font-weight:400">Volume</th>
+          <th style="padding:8px;text-align:right;font-size:10px;color:#888;font-weight:400">OI</th>
+          <th style="padding:8px;text-align:right;font-size:10px;color:#888;font-weight:400">Vol/OI</th>
+          <th style="padding:8px;text-align:right;font-size:10px;color:#888;font-weight:400">Premium</th>
+          <th style="padding:8px;text-align:right;font-size:10px;color:#888;font-weight:400">IV</th>
         </tr></thead>
         <tbody>{flow_rows}</tbody>
       </table>
@@ -4638,25 +4616,25 @@ def _build_flow_tab(options_flow: dict, etf_flow: dict, econ_cal: dict) -> str:
     events = econ_cal.get("events", [])
     cal_as_of = econ_cal.get("as_of", "—")
 
-    impact_col = {"high": "#B83232", "medium": "#B8943F", "low": "#1B6F4A"}
+    impact_col = {"high": "#B83232", "medium": "#c8b487", "low": "#1B6F4A"}
     impact_bg  = {"high": "#FEF0EF", "medium": "#FEF9EC", "low": "#EAF5EE"}
 
     cal_cards = ""
     for ev in events:
         imp = ev.get("impact", "low")
         ic  = impact_col.get(imp, "#999")
-        ib  = impact_bg.get(imp, "#F7F6F3")
+        ib  = impact_bg.get(imp, "#241f18")
         d   = ev.get("days_until", "?")
         d_str = "TODAY" if d == 0 else (f"in {d}d" if isinstance(d, int) else str(d))
-        d_col = "#B83232" if isinstance(d, int) and d <= 3 else ("#B8943F" if isinstance(d, int) and d <= 7 else "#555")
+        d_col = "#B83232" if isinstance(d, int) and d <= 3 else ("#c8b487" if isinstance(d, int) and d <= 7 else "#555")
         cal_cards += f"""<div style="display:flex;gap:14px;align-items:flex-start;padding:12px 14px;background:{ib};border:1px solid {ic}33;border-left:4px solid {ic};border-radius:6px">
           <div style="text-align:center;min-width:52px">
             <div style="font-size:18px">{_esc(ev.get('emoji','📅'))}</div>
-            <div style="font-size:11px;font-weight:700;color:{d_col}">{d_str}</div>
+            <div style="font-size:11px;font-weight:400;color:{d_col}">{d_str}</div>
           </div>
           <div>
-            <div style="font-size:13px;font-weight:700;color:#1A1A1A">{_esc(ev.get('name',''))}</div>
-            <div style="font-size:11px;color:#888;margin-top:2px">{_esc(ev.get('date',''))} &nbsp;·&nbsp; <span style="font-weight:700;color:{ic};text-transform:uppercase">{imp} impact</span></div>
+            <div style="font-size:13px;font-weight:400;color:#1A1A1A">{_esc(ev.get('name',''))}</div>
+            <div style="font-size:11px;color:#888;margin-top:2px">{_esc(ev.get('date',''))} &nbsp;·&nbsp; <span style="font-weight:400;color:{ic};text-transform:uppercase">{imp} impact</span></div>
           </div>
         </div>"""
 
@@ -4675,19 +4653,19 @@ def _build_flow_tab(options_flow: dict, etf_flow: dict, econ_cal: dict) -> str:
     <div class="two-col-even" style="gap:32px">
       <div style="flex:2;min-width:0">
         <p class="eyebrow" style="margin-bottom:8px">ETF Sector Rotation</p>
-        <h3 style="font-family:'Playfair Display',serif;font-size:18px;font-weight:700;color:#1A1A1A;margin:0 0 12px">Which sectors are getting money?</h3>
+        <h3 style="font-family:'Playfair Display',serif;font-size:18px;font-weight:400;color:#1A1A1A;margin:0 0 12px">Which sectors are getting money?</h3>
         {etf_panel}
       </div>
       <div style="flex:1;min-width:220px">
         <p class="eyebrow" style="margin-bottom:8px">Economic Calendar</p>
-        <h3 style="font-family:'Playfair Display',serif;font-size:18px;font-weight:700;color:#1A1A1A;margin:0 0 12px">Upcoming macro events</h3>
+        <h3 style="font-family:'Playfair Display',serif;font-size:18px;font-weight:400;color:#1A1A1A;margin:0 0 12px">Upcoming macro events</h3>
         {cal_panel}
       </div>
     </div>
 
     <div class="mt36">
       <p class="eyebrow" style="margin-bottom:8px">Options Unusual Flow</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:18px;font-weight:700;color:#1A1A1A;margin:0 0 4px">Large option bets — who's betting and which direction?</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:18px;font-weight:400;color:#1A1A1A;margin:0 0 4px">Large option bets — who's betting and which direction?</h3>
       <p class="lead" style="margin:0 0 14px">Vol/OI &gt; 1.5 means new money is entering (not existing holders). Premium &gt; $50K filters out noise. Green = call (bullish bet), red = put (bearish or hedge).</p>
       {options_panel}
     </div>
@@ -4730,29 +4708,29 @@ def _build_quant_qc_tab() -> str:
     ic_rec_html = "".join(f'<li style="margin-bottom:6px">{_esc(r)}</li>' for r in ic_recs)
 
     ic_card = f"""
-    <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;padding:20px;margin-bottom:20px;border-left:5px solid {ic_color}">
+    <div style="background:#fff;border:1px solid #241f18;border-radius:8px;padding:20px;margin-bottom:20px;border-left:5px solid {ic_color}">
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-        <div style="background:{ic_color};color:#fff;font-size:11px;font-weight:700;padding:4px 10px;border-radius:12px;letter-spacing:.8px">
+        <div style="background:{ic_color};color:#fff;font-size:11px;font-weight:400;padding:4px 10px;border-radius:12px;letter-spacing:.8px">
           {'⚠ ' if 'NOT' in ic_verdict else ''}IC AUDIT
         </div>
-        <span style="font-size:18px;font-weight:800;color:{ic_color}">{_esc(ic_verdict)}</span>
+        <span style="font-size:18px;font-weight:500;color:{ic_color}">{_esc(ic_verdict)}</span>
       </div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px">
         <div><p style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:3px">Observations</p>
-          <p style="font-size:22px;font-weight:800;color:{'#C0392B' if isinstance(ic_n,int) and ic_n<60 else '#1B6F4A'}">{ic_n}</p>
+          <p style="font-size:22px;font-weight:500;color:{'#C0392B' if isinstance(ic_n,int) and ic_n<60 else '#1B6F4A'}">{ic_n}</p>
           <p style="font-size:10px;color:#888">need 60+</p></div>
         <div><p style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:3px">Computed IC</p>
-          <p style="font-size:22px;font-weight:800;color:{ic_color}">{ic_val_str}</p>
+          <p style="font-size:22px;font-weight:500;color:{ic_color}">{ic_val_str}</p>
           <p style="font-size:10px;color:#888">dashboard shows +0.370</p></div>
         <div><p style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:3px">95% CI</p>
-          <p style="font-size:14px;font-weight:700;color:#555;margin-top:5px">{ic_ci_str}</p>
+          <p style="font-size:14px;font-weight:400;color:#555;margin-top:5px">{ic_ci_str}</p>
           <p style="font-size:10px;color:#888">includes zero → not sig.</p></div>
         <div><p style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:3px">Look-ahead Risk</p>
-          <p style="font-size:14px;font-weight:700;color:#1B6F4A;margin-top:5px">LOW</p>
+          <p style="font-size:14px;font-weight:400;color:#1B6F4A;margin-top:5px">LOW</p>
           <p style="font-size:10px;color:#888">no systematic leakage found</p></div>
       </div>
       <div style="background:#FEF9F0;border-radius:6px;padding:12px">
-        <p style="font-size:11px;font-weight:700;color:#B8943F;margin-bottom:8px">What To Do</p>
+        <p style="font-size:11px;font-weight:400;color:#c8b487;margin-bottom:8px">What To Do</p>
         <ul style="font-size:12px;color:#555;padding-left:18px;margin:0">{ic_rec_html}</ul>
       </div>
     </div>"""
@@ -4760,20 +4738,20 @@ def _build_quant_qc_tab() -> str:
     # ── Transaction Costs card ────────────────────────────────────────────────
     tc_color = "#27AE60" if tc.get("is_tc_netted") else "#C0392B"
     tc_card = f"""
-    <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;padding:20px;margin-bottom:20px;border-left:5px solid {tc_color}">
+    <div style="background:#fff;border:1px solid #241f18;border-radius:8px;padding:20px;margin-bottom:20px;border-left:5px solid {tc_color}">
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-        <div style="background:{tc_color};color:#fff;font-size:11px;font-weight:700;padding:4px 10px;border-radius:12px">TC AUDIT</div>
-        <span style="font-size:18px;font-weight:800;color:{tc_color}">{'✓ CONFIRMED NETTED' if tc.get('is_tc_netted') else '✗ NOT NETTED'}</span>
+        <div style="background:{tc_color};color:#fff;font-size:11px;font-weight:400;padding:4px 10px;border-radius:12px">TC AUDIT</div>
+        <span style="font-size:18px;font-weight:500;color:{tc_color}">{'✓ CONFIRMED NETTED' if tc.get('is_tc_netted') else '✗ NOT NETTED'}</span>
       </div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px">
         <div><p style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:3px">Total TC Paid</p>
-          <p style="font-size:22px;font-weight:800;color:#555">{tc.get('total_tc_bps','?')} bps</p></div>
+          <p style="font-size:22px;font-weight:500;color:#555">{tc.get('total_tc_bps','?')} bps</p></div>
         <div><p style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:3px">Net CAGR</p>
-          <p style="font-size:22px;font-weight:800;color:#1B6F4A">{tc.get('net_cagr','?')}%</p></div>
+          <p style="font-size:22px;font-weight:500;color:#1B6F4A">{tc.get('net_cagr','?')}%</p></div>
         <div><p style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:3px">Gross CAGR</p>
-          <p style="font-size:22px;font-weight:800;color:#555">{tc.get('gross_cagr_est','?')}%</p></div>
+          <p style="font-size:22px;font-weight:500;color:#555">{tc.get('gross_cagr_est','?')}%</p></div>
         <div><p style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:3px">TC Drag/Year</p>
-          <p style="font-size:22px;font-weight:800;color:#B83232">−{tc.get('tc_drag_pct','?')}%</p></div>
+          <p style="font-size:22px;font-weight:500;color:#B83232">−{tc.get('tc_drag_pct','?')}%</p></div>
       </div>
     </div>"""
 
@@ -4789,17 +4767,17 @@ def _build_quant_qc_tab() -> str:
         sc = "#1B6F4A" if sr > 0 else "#C0392B"
         ac = "#1B6F4A" if alpha_val > 0 else "#C0392B"
         st_rows += f"""<tr>
-          <td style="font-weight:700;font-size:12px">{_esc(p.get('name',''))}</td>
+          <td style="font-weight:400;font-size:12px">{_esc(p.get('name',''))}</td>
           <td style="color:#888;font-size:11px">{_esc(p.get('start',''))} → {_esc(p.get('end',''))}</td>
-          <td style="color:{sc};font-weight:700;font-variant-numeric:tabular-nums">{sr*100:+.1f}%</td>
+          <td style="color:{sc};font-weight:400;font-variant-numeric:tabular-nums">{sr*100:+.1f}%</td>
           <td style="font-variant-numeric:tabular-nums">{spr*100:+.1f}%</td>
-          <td style="color:{ac};font-weight:700;font-variant-numeric:tabular-nums">{alpha_val*100:+.1f}%</td>
+          <td style="color:{ac};font-weight:400;font-variant-numeric:tabular-nums">{alpha_val*100:+.1f}%</td>
           <td style="color:#B83232;font-variant-numeric:tabular-nums">{smdd*100:.1f}%</td>
         </tr>"""
     st_card = f"""
-    <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;padding:20px;margin-bottom:20px">
-      <p style="font-size:13px;font-weight:700;color:#1B2A4A;margin-bottom:4px">Stress Tests — 2020 &amp; 2022 Crisis Periods</p>
-      <p style="font-size:10px;color:#B8943F;margin-bottom:14px">⚠ {disclaimer}</p>
+    <div style="background:#fff;border:1px solid #241f18;border-radius:8px;padding:20px;margin-bottom:20px">
+      <p style="font-size:13px;font-weight:400;color:#1B2A4A;margin-bottom:4px">Stress Tests — 2020 &amp; 2022 Crisis Periods</p>
+      <p style="font-size:10px;color:#c8b487;margin-bottom:14px">⚠ {disclaimer}</p>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
         <thead><tr style="background:#F5F4F0">
           <th style="padding:8px;text-align:left">Period</th><th style="padding:8px;text-align:left">Dates</th>
@@ -4826,18 +4804,18 @@ def _build_quant_qc_tab() -> str:
             f'<td style="padding:4px 6px;text-align:center;font-size:10px;font-variant-numeric:tabular-nums;background:{_corr_bg(_cv(f1,f2))}">{_cv(f1,f2):.2f}</td>'
             for f2 in factors
         ) if corr_m else ""
-        corr_rows_html += f'<tr><td style="padding:4px 8px;font-size:10px;font-weight:600;white-space:nowrap;background:#F5F4F0">{f1[:12]}</td>{row_cells}</tr>'
+        corr_rows_html += f'<tr><td style="padding:4px 8px;font-size:10px;font-weight:400;white-space:nowrap;background:#F5F4F0">{f1[:12]}</td>{row_cells}</tr>'
     hp_html = "".join(f'<span style="background:#FEE2E2;color:#B83232;padding:2px 8px;border-radius:10px;font-size:11px;margin:2px">{_esc(hp)}</span>' for hp in high_pairs) or '<span style="color:#1B6F4A;font-size:11px">None above 0.60 threshold</span>'
     fc_card = f"""
-    <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;padding:20px;margin-bottom:20px">
-      <p style="font-size:13px;font-weight:700;color:#1B2A4A;margin-bottom:4px">Factor Correlation &amp; Redundancy</p>
+    <div style="background:#fff;border:1px solid #241f18;border-radius:8px;padding:20px;margin-bottom:20px">
+      <p style="font-size:13px;font-weight:400;color:#1B2A4A;margin-bottom:4px">Factor Correlation &amp; Redundancy</p>
       <div style="margin-bottom:12px"><span style="font-size:11px;color:#888">High correlation pairs (|r|&gt;0.60): </span>{hp_html}</div>
       <div style="overflow-x:auto;margin-bottom:14px"><table style="border-collapse:collapse">
         <thead><tr><th style="padding:4px 8px;font-size:9px;background:#F5F4F0"></th>{header_cells}</tr></thead>
         <tbody>{corr_rows_html}</tbody>
       </table></div>
       <div style="display:flex;gap:12px;flex-wrap:wrap">
-        {''.join(f'<div style="background:#F5F4F0;border-radius:6px;padding:8px 14px"><p style="font-size:9px;color:#888;text-transform:uppercase">{_esc(k)} VIF</p><p style="font-size:16px;font-weight:700;color:{"#C0392B" if isinstance(v,float) and v>5 else "#1B2A4A"}">{f"{v:.2f}" if isinstance(v,float) else "—"}</p></div>' for k, v in vif_scores.items())}
+        {''.join(f'<div style="background:#F5F4F0;border-radius:6px;padding:8px 14px"><p style="font-size:9px;color:#888;text-transform:uppercase">{_esc(k)} VIF</p><p style="font-size:16px;font-weight:400;color:{"#C0392B" if isinstance(v,float) and v==v and v>5 else "#1B2A4A"}">{f"{v:.2f}" if isinstance(v,float) and v==v else "—"}</p></div>' for k, v in vif_scores.items())}
       </div>
     </div>"""
 
@@ -4852,27 +4830,27 @@ def _build_quant_qc_tab() -> str:
         mdd  = y.get("mdd",          0) or 0
         sc   = "#1B6F4A" if sr > 0 else "#C0392B"
         ac   = "#1B6F4A" if alp > 0 else "#C0392B"
-        ext_rows += f"""<tr style="border-bottom:1px solid #F0EDE8">
-          <td style="padding:8px;font-weight:700">{_esc(str(y.get('year','')))}</td>
-          <td style="padding:8px;color:{sc};font-weight:700;font-variant-numeric:tabular-nums">{sr*100:+.1f}%</td>
+        ext_rows += f"""<tr style="border-bottom:1px solid #241f18">
+          <td style="padding:8px;font-weight:400">{_esc(str(y.get('year','')))}</td>
+          <td style="padding:8px;color:{sc};font-weight:400;font-variant-numeric:tabular-nums">{sr*100:+.1f}%</td>
           <td style="padding:8px;font-variant-numeric:tabular-nums">{spr*100:+.1f}%</td>
-          <td style="padding:8px;color:{ac};font-weight:700;font-variant-numeric:tabular-nums">{alp*100:+.1f}%</td>
+          <td style="padding:8px;color:{ac};font-weight:400;font-variant-numeric:tabular-nums">{alp*100:+.1f}%</td>
           <td style="padding:8px;color:#B83232;font-variant-numeric:tabular-nums">{mdd*100:.1f}%</td>
         </tr>"""
     ext_card = f"""
-    <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;padding:20px;margin-bottom:20px">
-      <p style="font-size:13px;font-weight:700;color:#1B2A4A;margin-bottom:4px">Extended Backtest 2019–2026 (Year-by-Year)</p>
-      <p style="font-size:10px;color:#B8943F;margin-bottom:14px">⚠ {ext_disclaimer}</p>
+    <div style="background:#fff;border:1px solid #241f18;border-radius:8px;padding:20px;margin-bottom:20px">
+      <p style="font-size:13px;font-weight:400;color:#1B2A4A;margin-bottom:4px">Extended Backtest 2019–2026 (Year-by-Year)</p>
+      <p style="font-size:10px;color:#c8b487;margin-bottom:14px">⚠ {ext_disclaimer}</p>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:16px">
         <div style="background:#F5F4F0;border-radius:6px;padding:12px">
           <p style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:3px">Strategy CAGR</p>
-          <p style="font-size:22px;font-weight:800;color:#1B2A4A">{ext.get('cagr','?')}%</p></div>
+          <p style="font-size:22px;font-weight:500;color:#1B2A4A">{ext.get('cagr','?')}%</p></div>
         <div style="background:#F5F4F0;border-radius:6px;padding:12px">
           <p style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:3px">SPY CAGR</p>
-          <p style="font-size:22px;font-weight:800;color:#555">{ext.get('spy_cagr','?')}%</p></div>
+          <p style="font-size:22px;font-weight:500;color:#555">{ext.get('spy_cagr','?')}%</p></div>
         <div style="background:#F5F4F0;border-radius:6px;padding:12px">
           <p style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:3px">Max Drawdown</p>
-          <p style="font-size:22px;font-weight:800;color:#B83232">{ext.get('mdd','?')}%</p></div>
+          <p style="font-size:22px;font-weight:500;color:#B83232">{ext.get('mdd','?')}%</p></div>
       </div>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
         <thead><tr style="background:#F5F4F0">
@@ -4884,17 +4862,918 @@ def _build_quant_qc_tab() -> str:
       </table></div>
     </div>"""
 
+    # ── Honest performance card: rigorous backtest + live-IC significance ──
+    honest_card = ""
+    try:
+        import json as _json
+        rb = _json.load(open(ROOT / "rigorous_backtest.json")) if (ROOT / "rigorous_backtest.json").exists() else {}
+        lo = (rb.get("long_only") or {}); ls = (rb.get("long_short") or {})
+        lof = lo.get("full_net", {}); lsf = ls.get("full_net", {}); spy = lo.get("spy_buy_hold", {})
+        def _pc(x):
+            try: return f"{float(x)*100:+.1f}%"
+            except Exception: return "—"
+        # live IC verdict
+        icv = "—"
+        icp = ROOT / "live_ic_report.md"
+        if icp.exists():
+            for _l in icp.read_text().splitlines():
+                if "SIGNIFICANT" in _l or "CONCLUSIVE" in _l or "NO SIGNIFICANT" in _l:
+                    icv = _l.replace("**", "").strip(); break
+        # PEAD research result (first real-edge attempt)
+        pead = _json.load(open(ROOT / "pead_results.json")) if (ROOT / "pead_results.json").exists() else {}
+        pead_line = ""
+        if pead and "sue_ic_t" in pead:
+            _pt = pead.get("sue_ic_t"); _pa = pead.get("alpha_annual_after_costs")
+            _verdict = "no significant edge in large-cap (t≈0) — as theory predicts; the anomaly lives in small/under-covered names" if (_pt is not None and abs(_pt) < 2) else "shows signal"
+            pead_line = (f'<p style="font-size:12px;color:#a89c8c;margin:8px 0 0"><strong style="color:#c8b487">'
+                f'Edge research — PEAD (earnings drift):</strong> SUE→return IC t={_pt}, '
+                f'alpha {(_pa or 0)*100:+.1f}%/yr → {_verdict}. '
+                f'<span style="color:#8faa9a">Framework correctly falsified a dead edge.</span></p>')
+        if lof:
+            honest_card = f"""
+    <div style="background:#16140f;border:1px solid #453a2c;border-left:4px solid #c8b487;border-radius:8px;padding:20px 24px;margin-bottom:24px">
+      <div style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#c8b487;font-weight:400;margin-bottom:6px">Honest Backtest — realistic costs · no look-ahead · survivorship-controlled · {lo.get('period','')}</div>
+      <p style="font-size:12px;color:#a89c8c;margin:0 0 14px">Point-in-time price signals over 16y deep history, restricted to names actually in the S&amp;P 500 at each date (PIT membership). Replaces the old inflated headline (Sharpe ~5 = look-ahead + no costs + survivorship bias).</p>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="border-bottom:2px solid #453a2c">
+          <th style="text-align:left;padding:6px 10px;color:#8a7f70;font-size:10px;text-transform:uppercase">Config</th>
+          <th style="text-align:right;padding:6px 10px;color:#8a7f70;font-size:10px;text-transform:uppercase">Sharpe</th>
+          <th style="text-align:right;padding:6px 10px;color:#8a7f70;font-size:10px;text-transform:uppercase">CAGR</th>
+          <th style="text-align:right;padding:6px 10px;color:#8a7f70;font-size:10px;text-transform:uppercase">Max DD</th>
+          <th style="text-align:right;padding:6px 10px;color:#8a7f70;font-size:10px;text-transform:uppercase">Beta</th>
+          <th style="text-align:right;padding:6px 10px;color:#8a7f70;font-size:10px;text-transform:uppercase">Alpha/yr</th>
+        </tr></thead><tbody>
+        <tr><td style="padding:6px 10px;color:#f4ecdf;font-weight:400">Long-Only (top 30)</td>
+          <td style="text-align:right;padding:6px 10px;color:#8faa9a;font-weight:400">{lof.get('sharpe','—')}</td>
+          <td style="text-align:right;padding:6px 10px">{_pc(lof.get('cagr'))}</td>
+          <td style="text-align:right;padding:6px 10px;color:#c68b83">{_pc(lof.get('max_dd'))}</td>
+          <td style="text-align:right;padding:6px 10px">{lo.get('beta_to_spy','—')}</td>
+          <td style="text-align:right;padding:6px 10px;color:#c8b487;font-weight:400">{_pc(lo.get('alpha_annual_after_costs'))}</td></tr>
+        <tr><td style="padding:6px 10px;color:#f4ecdf">Long-Short (top/bot 30)</td>
+          <td style="text-align:right;padding:6px 10px;color:#c68b83;font-weight:400">{lsf.get('sharpe','—')}</td>
+          <td style="text-align:right;padding:6px 10px;color:#c68b83">{_pc(lsf.get('cagr'))}</td>
+          <td style="text-align:right;padding:6px 10px;color:#c68b83">{_pc(lsf.get('max_dd'))}</td>
+          <td style="text-align:right;padding:6px 10px">{ls.get('beta_to_spy','—')}</td>
+          <td style="text-align:right;padding:6px 10px;color:#c68b83">{_pc(ls.get('alpha_annual_after_costs'))}</td></tr>
+        <tr><td style="padding:6px 10px;color:#9a8e80">SPY buy &amp; hold</td>
+          <td style="text-align:right;padding:6px 10px">{spy.get('sharpe','—')}</td>
+          <td style="text-align:right;padding:6px 10px">{_pc(spy.get('cagr'))}</td>
+          <td style="text-align:right;padding:6px 10px">{_pc(spy.get('max_dd'))}</td>
+          <td style="text-align:right;padding:6px 10px">1.00</td>
+          <td style="text-align:right;padding:6px 10px">0.0%</td></tr>
+      </tbody></table></div>
+      <p style="font-size:12px;color:#a89c8c;margin:14px 0 0"><strong style="color:#c68b83">Short book loses money</strong> (now dropped — long-only recommended book). Once survivorship bias is removed, <strong>long-only alpha ≈ 0</strong> (R²={lo.get('r2_market','—')} to market) — the strategy is essentially a beta play, not stock-selection edge.</p>
+      <p style="font-size:12px;color:#a89c8c;margin:8px 0 0"><strong style="color:#c8b487">Live signal edge:</strong> {icv}</p>
+      <p style="font-size:12px;color:#a89c8c;margin:8px 0 0"><strong style="color:#c8b487">Overfitting check:</strong> a single momentum signal matches/beats the 4-signal blend — the extra signals add no edge (evidence to simplify the live 10+ signal stack).</p>
+      {pead_line}
+    </div>"""
+    except Exception:
+        honest_card = ""
+
     return f"""<section id="sec-qc" class="tab-section">
   <div class="container">
     <p class="eyebrow">System · Quant QC</p>
     <h2 class="section-head">Quantitative Quality Control — Model Integrity Report</h2>
     <div class="rule"></div>
-    <p style="color:#666;font-size:13px;margin-bottom:24px">Six independent checks run on the Canyon system. Results are honest — including where the model falls short. Data as of last script run.</p>
+    <p style="color:#666;font-size:13px;margin-bottom:24px">Independent honesty checks on the Canyon system — including where the model falls short.</p>
+    {honest_card}
     {ic_card}
     {tc_card}
     {st_card}
     {fc_card}
     {ext_card}
+  </div>
+</section>"""
+
+
+def _intraday_panel() -> str:
+    """日内感知: 盘中牛熊 + 盘中新闻 (Intraday News) + 盘中入场时机 (Intraday Entry Timing)。"""
+    p = ROOT / "intraday_signals.json"
+    if not p.exists():
+        return ""
+    try:
+        j = json.load(open(p))
+    except Exception:
+        return ""
+    reg = j.get("regime", {})
+    rname = reg.get("regime", "—")
+    rcol = "#8faa9a" if rname == "进攻" else "#c68b83" if rname == "避险" else "#c0a878"
+    news = j.get("news", [])[:6]
+    entry = j.get("entry", [])
+    nrows = "".join(
+        f'<div style="display:flex;gap:8px;padding:2px 0;font-size:11.5px"><span style="color:#8a7f70;white-space:nowrap">{n.get("mins_ago","?")}分前</span>'
+        f'<span style="color:#c8b487;font-weight:400">{n.get("ticker","")}</span>'
+        f'<span style="color:#cabeae">{n.get("title","")}</span></div>' for n in news) or '<div style="color:#8a7f70;font-size:12px">近8小时无新闻</div>'
+    erows = ""
+    for e in entry:
+        sig = str(e.get("信号", ""))
+        scol = "#8faa9a" if "可入场" in sig else "#c0a878" if "等回调" in sig or "偏强" in sig else "#c68b83"
+        erows += (f'<tr><td style="padding:5px 10px;color:#f4ecdf;font-weight:400">{e.get("ticker","")}</td>'
+                  f'<td style="padding:5px 10px;text-align:right;color:#a89c8c;font-size:11px;font-variant-numeric:tabular-nums">{e.get("px","")}</td>'
+                  f'<td style="padding:5px 10px;text-align:right;color:#8a7f70;font-size:11px;font-variant-numeric:tabular-nums">{e.get("vwap","")}</td>'
+                  f'<td style="padding:5px 10px;color:{scol};font-size:11px">{sig}</td></tr>')
+    return f"""
+    <div style="margin-bottom:26px;background:#16140f;border:1px solid #3a3128;border-radius:8px;padding:16px 18px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        <span style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em">日内感知层 (Intraday Awareness Layer) · 盘中实时(免费日内数据)</span>
+        <span style="font-size:11px;color:#8a7f70">{j.get('updated','')} · 收盘后=最后交易日</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+        <div>
+          <div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.12em;margin-bottom:4px">① 盘中牛熊判读 (Intraday Bull/Bear Read)</div>
+          <div style="font-size:24px;font-weight:400;color:{rcol};font-family:'Financier Display',Georgia,serif">{rname}<span style="font-size:13px;color:#8a7f70;margin-left:8px">分{reg.get('score','')}</span></div>
+          <div style="font-size:11px;color:#a89c8c;margin-top:4px">QQQ {reg.get('qqq_px','')} vs VWAP {reg.get('vwap','')} · 当日{reg.get('day_chg_%','')}% · VIX {reg.get('vix','')}</div>
+          <div style="font-size:11px;color:#8a7f70;margin-top:2px">{' / '.join(reg.get('reasons',[]))}</div>
+          <div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.12em;margin:12px 0 4px">③ 盘中入场时机 (Intraday Entry Timing)(集中清单)</div>
+          <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse"><tbody>{erows}</tbody></table></div>
+        </div>
+        <div>
+          <div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px">② 盘中新闻 (Intraday News)(近8小时·分钟级)</div>
+          {nrows}
+        </div>
+      </div>
+      <p style="color:#746a5d;font-size:10.5px;margin-top:10px">诚实: 免费日内仅近7-60天历史, 可实时监控/择时, 无法深度回测验证。是盘中工具, 非"验证过必赚"。</p>
+    </div>"""
+
+
+def _alphavantage_news_panel() -> str:
+    """Alpha Vantage market news sentiment (free-tier NEWS_SENTIMENT, 1 call/day).
+    Honest states: not-enabled (no key), error (rate-limit/network), or live feed."""
+    p = ROOT / "alphavantage_news_sentiment.json"
+    if not p.exists():
+        return ""
+    try:
+        d = json.load(open(p))
+    except Exception:
+        return ""
+
+    import html as _h
+    def _esc(s): return _h.escape(str(s)) if s is not None else ""
+
+    C_CARD, C_INK, C_MUTE, C_SUB = "#16140f", "#f0e9da", "#8f866f", "#b0a68f"
+    C_GOLD, C_POS, C_NEG = "#c8b487", "#8faa9a", "#c68b83"
+
+    def _wrap(inner: str) -> str:
+        return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;'
+                f'border-radius:8px;padding:16px 18px">'
+                f'<div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;'
+                f'color:{C_GOLD};margin-bottom:2px">Alpha Vantage</div>'
+                f'<div style="font-size:19px;font-family:\'Baskerville\',\'Hoefler Text\',Georgia,serif;'
+                f'color:{C_INK};margin-bottom:12px">Market News Sentiment</div>{inner}</div>')
+
+    # State 1: not enabled (no key) — honest, not faked.
+    if not d.get("enabled", False):
+        reason = _esc(str(d.get("reason", "Not enabled.")))
+        return _wrap(
+            f'<div style="border-left:3px solid {C_GOLD};padding:10px 14px;background:#1b1710;border-radius:6px">'
+            f'<p style="font-size:12.5px;color:{C_GOLD};margin-bottom:3px">Not enabled</p>'
+            f'<p style="font-size:12px;color:{C_SUB};line-height:1.5">{reason}</p></div>')
+
+    # State 2: enabled but this run failed (rate limit / network) — honest.
+    if not d.get("ok", False):
+        err = _esc(str(d.get("error", "fetch failed")))
+        return _wrap(
+            f'<div style="border-left:3px solid {C_NEG};padding:10px 14px;background:#1b1310;border-radius:6px">'
+            f'<p style="font-size:12.5px;color:{C_NEG};margin-bottom:3px">No data this run</p>'
+            f'<p style="font-size:12px;color:{C_SUB};line-height:1.5">{err}</p></div>')
+
+    # State 3: live feed.
+    avg = d.get("avg_sentiment")
+    label = str(d.get("market_label", "Neutral"))
+    lab_col = C_POS if ("Bull" in label) else (C_NEG if "Bear" in label else C_MUTE)
+    n = int(d.get("n_articles", 0) or 0)
+    as_of = _esc(str(d.get("as_of", "")))
+    head = (f'<div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:12px">'
+            f'<span style="font-size:26px;color:{lab_col};font-family:\'Baskerville\',Georgia,serif">{label}</span>'
+            f'<span style="font-size:13px;color:{C_MUTE}">avg score '
+            f'<b style="color:{lab_col}">{avg if avg is not None else "—"}</b> · {n} articles · {as_of}</span></div>')
+    rows = ""
+    for a in (d.get("top_articles") or [])[:10]:
+        s_lab = str(a.get("sentiment", ""))
+        s_col = C_POS if ("Bull" in s_lab) else (C_NEG if "Bear" in s_lab else C_MUTE)
+        title = _esc(str(a.get("title", "")))
+        src = _esc(str(a.get("source", "")))
+        url = _esc(str(a.get("url", "")))
+        t_html = f'<a href="{url}" target="_blank" style="color:{C_INK};text-decoration:none">{title}</a>' if url else title
+        rows += (f'<div style="padding:9px 0;border-top:1px solid #241f18;display:flex;gap:12px;align-items:flex-start">'
+                 f'<span style="flex-shrink:0;min-width:96px;font-size:10px;color:{s_col};text-transform:uppercase;'
+                 f'letter-spacing:.05em">{_esc(s_lab)}</span>'
+                 f'<span style="flex:1;font-size:12.5px;line-height:1.45;color:{C_SUB}">{t_html}'
+                 f'<span style="color:{C_MUTE};font-size:11px"> — {src}</span></span></div>')
+    return _wrap(head + rows)
+
+
+def _fred_macro_panel() -> str:
+    """第1层真实宏观数据盘: FRED 官方序列(利率/信用/就业/通胀/风险)。"""
+    p = ROOT / "fred_macro_latest.json"
+    if not p.exists():
+        return ""
+    try:
+        d = json.load(open(p))
+    except Exception:
+        return ""
+    # 分组: (标题, [(key, 单位后缀, 好方向 up/down/None)])
+    groups = [
+        ("Rates / Curve", [("T10Y2Y", "", None), ("DGS10", "%", None), ("DGS2", "%", None),
+                       ("DFII10", "%", None), ("FEDFUNDS", "%", None)]),
+        ("Credit Spreads", [("BAMLH0A0HYM2", "%", "down"), ("BAMLC0A0CM", "%", "down")]),
+        ("Jobs / Growth", [("UNRATE", "%", "down"), ("ICSA", "K", "down"), ("PAYEMS", "M", "up")]),
+        ("Inflation / Risk", [("CPILFESL", "", "down"), ("VIXCLS", "", "down"), ("UMCSENT", "", "up")]),
+    ]
+
+    def _cell(key):
+        v = d.get(key)
+        if not isinstance(v, dict) or not v.get("ok", True) or v.get("value") is None:
+            return ""
+        val = v.get("value")
+        lbl = v.get("label", key)
+        chg = v.get("chg_1m")
+        good = None
+        # 数值格式
+        if key == "ICSA":
+            disp = f"{val/1000:,.0f}K"
+        elif key == "PAYEMS":
+            disp = f"{val/1000:,.1f}M"
+        elif key == "M2SL":
+            disp = f"${val/1000:,.1f}T"
+        elif abs(val) >= 100:
+            disp = f"{val:,.1f}"
+        else:
+            disp = f"{val:.2f}"
+        chg_html = ""
+        if chg is not None:
+            arrow = "▲" if chg > 0 else "▼" if chg < 0 else "＝"
+            ccol = "#8a7f70"
+            chg_html = f'<span style="font-size:10px;color:{ccol};margin-left:6px">{arrow}{abs(chg):.2f} 1m</span>'
+        return (f'<div style="padding:8px 12px;border:1px solid #2f281f;border-radius:6px;background:#191410">'
+                f'<div style="font-size:9.5px;color:#8a7f70;text-transform:uppercase;letter-spacing:.08em;line-height:1.25;min-height:24px">{lbl}</div>'
+                f'<div style="font-size:19px;font-weight:400;color:#f4ecdf;font-family:\'Financier Display\',Georgia,serif;font-variant-numeric:tabular-nums;margin-top:3px">{disp}{chg_html}</div>'
+                f'<div style="font-size:9px;color:#5f574a;margin-top:2px">as of {v.get("as_of","")}</div></div>')
+
+    cols = ""
+    for title, keys in groups:
+        cells = "".join(c for c in (_cell(k) for k, *_ in keys) if c)
+        if not cells:
+            continue
+        cols += (f'<div><div style="font-size:10px;color:#c0a878;text-transform:uppercase;letter-spacing:.12em;margin-bottom:8px">{title}</div>'
+                 f'<div style="display:grid;grid-template-columns:1fr;gap:8px">{cells}</div></div>')
+    meta = d.get("_meta", {})
+    upd = meta.get("as_of", "") if isinstance(meta, dict) else ""
+    # 简要读数: 曲线是否倒挂 / 信用是否紧
+    yc = d.get("T10Y2Y", {}).get("value")
+    hy = d.get("BAMLH0A0HYM2", {}).get("value")
+    read = []
+    if yc is not None:
+        read.append("Curve inverted (recession signal)" if yc < 0 else f"Curve normal (+{yc:.2f})")
+    if hy is not None:
+        read.append("Credit tight" if hy > 5 else "Credit easy/normal")
+    return f"""
+    <div style="margin-bottom:26px;background:#16140f;border:1px solid #3a3128;border-radius:8px;padding:16px 18px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:14px">
+        <span style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em">Layer 1 · Real Macro Dashboard · FRED official series (free)</span>
+        <span style="font-size:11px;color:#8a7f70">{' · '.join(read)} · {upd}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:18px">{cols}</div>
+    </div>"""
+
+
+def _pnl_contrib_panel() -> str:
+    """谁在赚钱: 历史累计 P&L 贡献榜(真实归因, 非模拟)。"""
+    p = ROOT / "pnl_top_contributors.csv"
+    if not p.exists() or p.stat().st_size < 20:
+        return ""
+    try:
+        df = pd.read_csv(p)
+    except Exception:
+        return ""
+    if df.empty or "total_contribution" not in df.columns:
+        return ""
+    df = df.sort_values("total_contribution", ascending=False).head(12)
+    mx = max(abs(df["total_contribution"].max()), abs(df["total_contribution"].min()), 1e-9)
+    rows = ""
+    for _, r in df.iterrows():
+        c = float(r["total_contribution"])
+        pct = c * 100
+        w = min(abs(c) / mx * 100, 100)
+        col = "#8faa9a" if c >= 0 else "#c68b83"
+        rows += (f'<div style="display:flex;align-items:center;gap:10px;padding:3px 0">'
+                 f'<span style="width:52px;font-size:12px;font-weight:400;color:#f4ecdf">{r["ticker"]}</span>'
+                 f'<div style="flex:1;height:14px;background:#191410;border-radius:3px;overflow:hidden"><div style="height:100%;width:{w:.0f}%;background:{col};opacity:.75"></div></div>'
+                 f'<span style="width:64px;text-align:right;font-size:11.5px;color:{col};font-variant-numeric:tabular-nums">{pct:+.1f}%</span>'
+                 f'<span style="width:44px;text-align:right;font-size:10px;color:#5f574a;font-variant-numeric:tabular-nums">{int(r.get("trading_days",0))}d</span></div>')
+    return f"""
+    <div style="margin-bottom:26px;background:#16140f;border:1px solid #3a3128;border-radius:8px;padding:16px 18px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        <span style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em">Attribution · Cumulative P&L Contributors (who is making money)</span>
+        <span style="font-size:11px;color:#8a7f70">bar = share of top contribution · right = trading days</span>
+      </div>
+      {rows}
+      <p style="color:#746a5d;font-size:10.5px;margin-top:10px">Ranked by each name's contribution to cumulative portfolio return (real attribution). Concentrate firepower on the persistent positive contributors.</p>
+    </div>"""
+
+
+def _pead_panel() -> str:
+    """事件驱动核心验证: 财报后漂移(PEAD)——盈利超预期后是否延续。"""
+    p = ROOT / "pead_summary.json"
+    if not p.exists():
+        return ""
+    try:
+        d = json.load(open(p))
+    except Exception:
+        return ""
+    bw = d.get("by_window", [])
+    if not bw:
+        return ""
+    cells = ""
+    for w in bw:
+        wd = w.get("window_days")
+        alpha = w.get("avg_alpha", 0) * 100
+        hit = w.get("hit_rate", 0) * 100
+        acol = "#8faa9a" if alpha >= 0 else "#c68b83"
+        cells += (f'<div style="padding:10px 14px;border:1px solid #2f281f;border-radius:6px;background:#191410;text-align:center">'
+                  f'<div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.1em">+{wd}-day window</div>'
+                  f'<div style="font-size:20px;font-weight:400;color:{acol};font-family:\'Financier Display\',Georgia,serif;font-variant-numeric:tabular-nums;margin-top:3px">{alpha:+.2f}%</div>'
+                  f'<div style="font-size:10px;color:#a89c8c;margin-top:2px">alpha · hit {hit:.0f}%</div></div>')
+    n = d.get("n_events", "?")
+    return f"""
+    <div style="margin-bottom:26px;background:#16140f;border:1px solid #3a3128;border-radius:8px;padding:16px 18px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        <span style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em">Event validation · Post-Earnings Drift (PEAD) · last {n} earnings events</span>
+        <span style="font-size:11px;color:#8a7f70">{d.get('as_of','')}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px">{cells}</div>
+      <p style="color:#746a5d;font-size:10.5px;margin-top:10px">Honest read: large-cap PEAD drift is weak (as theory predicts). This is a reality check on whether events persist — not a guarantee. The real edge is in concentrated stock selection and event-type filtering, not mechanically chasing earnings.</p>
+    </div>"""
+
+
+def _build_event_engine_tab() -> str:
+    """事件驱动主动投资系统 — 作战台 (War Room) (第0/5/7/9/10层)."""
+    cand_p = ROOT / "event_candidates.csv"
+    if not cand_p.exists() or cand_p.stat().st_size < 5:
+        body = ('<p style="color:#a89c8c">尚未生成候选。请先建 <code style="color:#c8b487">event_pool.csv</code> '
+                '(股票池 + L/N/M/P/C 打分),再运行 <code style="color:#c8b487">canyon_event_system.py</code>。</p>')
+        return f'<section id="sec-eventengine" class="tab-section"><div class="container"><p class="eyebrow">利润发动机 (Profit Engine) · 事件驱动</p><h2 class="section-head">作战台 (War Room)</h2><div class="rule"></div>{body}</div></section>'
+
+    df = pd.read_csv(cand_p)
+    # 第1层宏观情报评分卡 (Macro Intel Scorecard)
+    intel_html = ""
+    ip = ROOT / "macro_intel_scorecard.json"
+    if ip.exists():
+        try:
+            intel = json.load(open(ip))
+            mods = intel.get("情报模块", {})
+            heat_rows = ""
+            for nm, v in sorted(mods.items(), key=lambda x: -x[1].get("heat", 0)):
+                h = int(v.get("heat", 0))
+                col = "#c68b83" if h >= 3 else "#c0a878" if h == 2 else "#746a5d"
+                bars = "".join(f'<span style="display:inline-block;width:14px;height:8px;border-radius:2px;margin-right:2px;background:{col if i<h else "#2a231b"}"></span>' for i in range(4))
+                heat_rows += f'<div style="display:flex;align-items:center;gap:10px;padding:3px 0"><span style="width:110px;font-size:12px;color:#a89c8c">{nm}</span>{bars}<span style="color:{col};font-size:11px;margin-left:4px">{v.get("hits",0)}条</span></div>'
+            active = intel.get("激活事件池 (Active Event Pool)", [])
+            intel_html = f"""
+    <div style="background:#16140f;border:1px solid #453a2c;border-radius:8px;padding:20px 24px;margin-bottom:24px">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px">
+        <div><span style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:1px">第1层 · 宏观情报评分卡 (Macro Intel Scorecard)</span>
+          <span style="font-size:12px;color:#746a5d;margin-left:10px">扫描新闻 {intel.get('news_scanned','?')} 条 · {intel.get('updated','')}</span></div>
+        <div style="font-size:13px;color:#c8b487;font-weight:400">宏观模式 (Macro Mode): {intel.get('宏观模式 (Macro Mode)','—')} · 总仓位 {intel.get('总仓位制度 (Total Position Regime)','—')}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+        <div>{heat_rows}</div>
+        <div style="font-size:12px;color:#a89c8c;line-height:1.9">
+          <div><strong style="color:#8faa9a">重点受益链条 (Key Beneficiary Chain):</strong> {', '.join(intel.get('重点受益链条 (Key Beneficiary Chain)',[])) or '—'}</div>
+          <div><strong style="color:#c68b83">风险链条 (Risk Chain):</strong> {', '.join(intel.get('风险链条 (Risk Chain)',[])) or '—'}</div>
+          <div style="margin-top:8px"><strong style="color:#c8b487">激活事件池 (Active Event Pool):</strong> {', '.join(active) or '—'}</div>
+        </div>
+      </div>
+    </div>"""
+        except Exception:
+            intel_html = ""
+    n_pe = int((df["pool"] == "利润发动机 (Profit Engine)").sum())
+    n_ev = int((df["pool"] == "事件型爆发池").sum())
+    n_active = n_pe + n_ev
+    mf = float(df["MacroFilter"].iloc[0]) if "MacroFilter" in df.columns and len(df) else 0.85
+    if n_active <= 2:
+        sw_state, sw_pos, sw_color = "机会稀缺", "20%–45%", "#c68b83"
+    elif n_active <= 5:
+        sw_state, sw_pos, sw_color = "机会一般", "45%–70%", "#c0a878"
+    else:
+        sw_state, sw_pos, sw_color = "机会丰富", "70%–100%", "#8faa9a"
+
+    # 行业板块轮动信号 (Sector Rotation Signal)
+    rot_html = ""
+    rotp = ROOT / "sector_rotation.csv"
+    if rotp.exists():
+        try:
+            rdf = pd.read_csv(rotp)
+            SEC_CN = {"Technology":"科技","Communication Services":"通信","Financials":"金融",
+                      "Health Care":"医疗","Industrials":"工业","Energy":"能源","Materials":"材料",
+                      "Utilities":"公用","Real Estate":"地产","Consumer Discretionary":"可选消费",
+                      "Consumer Staples":"必需消费"}
+            rrows = ""
+            for _, r in rdf.iterrows():
+                sig = str(r["signal"]); score = float(r["rotation_score"])
+                col = "#8faa9a" if "超配" in sig else "#c68b83" if "低配" in sig else "#9a8e80"
+                dr = str(r["direction"]); dcol = "#8faa9a" if "▲" in dr else "#c68b83" if "▼" in dr else "#9a8e80"
+                rs = float(r["rel_strength"]) * 100; rscol = "#8faa9a" if rs >= 0 else "#c68b83"
+                bar = int(round(score))
+                secname = SEC_CN.get(str(r["sector"]), str(r["sector"]))
+                rrows += f"""<tr>
+                  <td style="padding:7px 10px;font-weight:400;color:#f4ecdf">{secname}<span style="color:#746a5d;font-size:10px;margin-left:5px">{r['n']}只</span></td>
+                  <td style="padding:7px 10px;min-width:130px"><div style="background:#2a231b;border-radius:3px;height:16px;position:relative"><div style="background:{col};height:16px;width:{bar}%;border-radius:3px"></div><span style="position:absolute;left:6px;top:0;font-size:10px;line-height:16px;color:#0b0f17;font-weight:400">{score:.0f}</span></div></td>
+                  <td style="padding:7px 10px"><span style="color:{col};font-size:11px;font-weight:400">{sig}</span></td>
+                  <td style="padding:7px 10px;color:{dcol};font-size:11px">{dr}</td>
+                  <td style="padding:7px 10px;text-align:right;color:{rscol};font-size:11px;font-variant-numeric:tabular-nums">{rs:+.1f}%</td>
+                  <td style="padding:7px 10px;text-align:right;color:#a89c8c;font-size:11px;font-variant-numeric:tabular-nums">{float(r['breadth_50d'])*100:.0f}%</td>
+                  <td style="padding:7px 10px;color:#8a7f70;font-size:11px">{r.get('event_type','—')}</td>
+                </tr>"""
+            lead = [SEC_CN.get(s, s) for s in rdf[rdf["signal"].str.contains("超配")]["sector"]]
+            lag = [SEC_CN.get(s, s) for s in rdf[rdf["signal"].str.contains("低配")]["sector"]]
+            rot_html = f"""
+    <div style="margin-bottom:26px">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <span style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:1px">行业板块轮动信号 (Sector Rotation Signal) · 标普500全体聚合(资金在轮入/轮出哪些板块)</span>
+        <span style="font-size:12px"><span style="color:#8faa9a">轮入 {', '.join(lead)}</span> <span style="color:#746a5d">|</span> <span style="color:#c68b83">轮出 {', '.join(lag)}</span></span>
+      </div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:620px">
+        <thead><tr style="border-bottom:1px solid #453a2c">
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">板块</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">轮动分</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">信号</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">方向</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">相对强度 (Relative Strength)</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">广度</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">事件类型 (Event Type)</th>
+        </tr></thead><tbody>{rrows}</tbody></table></div>
+      <p style="color:#746a5d;font-size:11px;margin-top:8px">轮动分综合: 相对强度 (Relative Strength)(vs大盘) + 加速度(1M vs 3M) + 广度(站上50日线占比) + 6月Momentum。方向 ▲加速=资金流入 / ▼退潮=流出。</p>
+    </div>"""
+        except Exception:
+            rot_html = ""
+
+    # 板块龙头 (Sector Leaders) ETF 指标 (可交易工具视角)
+    etf_html = ""
+    etfp = ROOT / "sector_etf_indicators.csv"
+    if etfp.exists():
+        try:
+            edf = pd.read_csv(etfp)
+            erows = ""
+            for _, r in edf.iterrows():
+                rs = float(r["rel_strength"]) * 100 if pd.notna(r["rel_strength"]) else 0.0
+                rscol = "#8faa9a" if rs >= 0 else "#c68b83"
+                m1 = float(r["mom_1m"]) * 100; m1c = "#8faa9a" if m1 >= 0 else "#c68b83"
+                m3 = float(r["mom_3m"]) * 100; m3c = "#8faa9a" if m3 >= 0 else "#c68b83"
+                dr = str(r["direction"]); dcol = "#8faa9a" if "▲" in dr else "#c68b83" if "▼" in dr else "#9a8e80"
+                trend = str(r["trend"]); tcol = "#8faa9a" if "Longs" in trend else "#c68b83" if "偏空" in trend else "#c0a878"
+                erows += f"""<tr>
+                  <td style="padding:7px 10px;font-weight:400;color:#c8b487">{r['etf']}</td>
+                  <td style="padding:7px 10px;color:#cabeae;font-size:11px">{r['name']}</td>
+                  <td style="padding:7px 10px;text-align:right;color:#f4ecdf;font-size:11px;font-variant-numeric:tabular-nums">${r['price']:.2f}</td>
+                  <td style="padding:7px 10px;text-align:right;color:{m1c};font-size:11px;font-variant-numeric:tabular-nums">{m1:+.1f}%</td>
+                  <td style="padding:7px 10px;text-align:right;color:{m3c};font-size:11px;font-variant-numeric:tabular-nums">{m3:+.1f}%</td>
+                  <td style="padding:7px 10px;text-align:right;color:{rscol};font-size:11px;font-weight:400;font-variant-numeric:tabular-nums">{rs:+.1f}%</td>
+                  <td style="padding:7px 10px;color:{dcol};font-size:11px">{dr}</td>
+                  <td style="padding:7px 10px;color:{tcol};font-size:11px">{trend}</td>
+                </tr>"""
+            etf_html = f"""
+    <div style="margin-bottom:26px">
+      <div style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">板块龙头 (Sector Leaders) ETF 指标 · 可交易工具视角(按相对强度 (Relative Strength)排序,基准 SPY)</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:640px">
+        <thead><tr style="border-bottom:1px solid #453a2c">
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">ETF</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">板块</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">价格</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">1M</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">3M</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">相对强度 (Relative Strength)</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">方向</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">趋势</th>
+        </tr></thead><tbody>{erows}</tbody></table></div>
+      <p style="color:#746a5d;font-size:11px;margin-top:8px">相对强度 (Relative Strength) = ETF 3月涨幅 − SPY 3月涨幅(跑赢大盘为正)。与上方成分股聚合互补: 这里是可直接买卖的板块工具。</p>
+    </div>"""
+        except Exception:
+            etf_html = ""
+
+    # 真实数据源 (Real Data Sources): SEC EDGAR 8-K 事件 + CFTC COT 商品持仓
+    src_html = ""
+    try:
+        ev_cards = ""
+        ep = ROOT / "edgar_events.csv"
+        if ep.exists():
+            ed = pd.read_csv(ep)
+            hi = ed[pd.to_numeric(ed.get("8k_severity", 0), errors="coerce").fillna(0) >= 2].copy()
+            hi = hi.sort_values("8k_severity", ascending=False).head(8)
+            n8k = int((pd.to_numeric(ed.get("n_8k_30d", 0), errors="coerce").fillna(0) > 0).sum())
+            nins = int((pd.to_numeric(ed.get("insider_active", 0), errors="coerce").fillna(0) > 0).sum())
+            evrows = ""
+            for _, r in hi.iterrows():
+                sev = int(float(r.get("8k_severity", 0)))
+                scol = "#c68b83" if sev >= 4 else "#c0a878" if sev >= 3 else "#8a7f70"
+                evrows += f'<div style="display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-size:12px"><span><strong style="color:#f4ecdf">{r["ticker"]}</strong> <span style="color:#8a7f70">{r.get("8k_desc","")}</span></span><span style="color:{scol};white-space:nowrap">严重度{sev} · {r.get("latest_8k_date","")}</span></div>'
+            ev_cards = f"""
+      <div style="background:#16140f;border:1px solid #3a3128;border-left:3px solid #c8b487;padding:14px 18px;border-radius:8px">
+        <div style="font-size:12px;font-weight:400;color:#c8b487;margin-bottom:2px">SEC EDGAR 真实事件流</div>
+        <div style="font-size:11px;color:#8a7f70;margin-bottom:8px">{n8k} 家近期8-K · {nins} 家内部人活跃(Form4)· 官方近实时</div>
+        {evrows or '<div style="color:#8a7f70;font-size:12px">近期无高严重度8-K</div>'}
+      </div>"""
+        cot_card = ""
+        cp = ROOT / "cot_positioning.csv"
+        if cp.exists():
+            cd = pd.read_csv(cp)
+            cotrows = ""
+            for _, r in cd.iterrows():
+                idx = float(r.get("cot_index", 50))
+                icol = "#8faa9a" if idx < 25 else "#c68b83" if idx > 80 else "#a89c8c"
+                fav = float(r.get("cot_boost", 0)) > 0
+                cotrows += f'<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;font-size:12px"><span style="color:#cabeae">{r["commodity"]}{" 🔵" if fav else ""}</span><span style="color:{icol};font-variant-numeric:tabular-nums">COT {idx:.0f} · {r.get("setup","")[:12]}</span></div>'
+            cot_card = f"""
+      <div style="background:#16140f;border:1px solid #3a3128;border-left:3px solid #8aa6a6;padding:14px 18px;border-radius:8px">
+        <div style="font-size:12px;font-weight:400;color:#8aa6a6;margin-bottom:2px">CFTC 商品持仓(COT)</div>
+        <div style="font-size:11px;color:#8a7f70;margin-bottom:8px">投机资金极值 → 商品供需错配 setup · 官方周报</div>
+        {cotrows}
+      </div>"""
+        if ev_cards or cot_card:
+            src_html = f"""
+    <div style="margin-bottom:26px">
+      <div style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em;margin-bottom:10px">真实数据源 (Real Data Sources) · SEC 备案 + CFTC 持仓(超越 yfinance 的官方事件流)</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">{ev_cards}{cot_card}</div>
+    </div>"""
+    except Exception:
+        src_html = ""
+
+    # 第2层生命周期 (Lifecycle) + 第4层功能池 映射
+    life_m, conf_m = {}, {}
+    lp = ROOT / "lifecycle_style.csv"
+    if lp.exists():
+        try:
+            for _, r in pd.read_csv(lp).iterrows():
+                life_m[str(r["ticker"])] = f"{r.get('lifecycle','')}/{r.get('style','')}"
+        except Exception:
+            pass
+    fp_html = ""
+    fpp = ROOT / "functional_pools.csv"
+    if fpp.exists():
+        try:
+            fdf = pd.read_csv(fpp)
+            pool_meta = {
+                "利润发动机 (Profit Engine)储备池": ("#c8b487", "预备役 · 逼近发动机门槛,前瞻确认到位即升入"),
+                "核心储备池":     ("#8faa9a", "压舱石 · 稳健趋势/防御,提供 beta 与稳定性"),
+                "主题链条观察池": ("#8aa6a6", "挂单观察 · 有事件信号但执行/结构未就位"),
+                "回收观察池":     ("#c68b83", "逻辑走坏 · 衰退期/执行分低,待剔除"),
+            }
+            cards = ""
+            for pool, (col, desc) in pool_meta.items():
+                sub = fdf[fdf["func_pool"] == pool]
+                names = " ".join(f'<span style="color:#cabeae">{t}</span>' for t in sub["ticker"].head(10))
+                cards += f"""
+      <div style="background:#16140f;border:1px solid #3a3128;border-left:4px solid {col};padding:16px 18px;border-radius:8px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:400;color:{col}">{pool}</span><span style="font-size:20px;font-weight:400;color:#f4ecdf;font-variant-numeric:tabular-nums">{len(sub)}</span></div>
+        <div style="font-size:11px;color:#8a7f70;margin:4px 0 8px">{desc}</div>
+        <div style="font-size:11px;line-height:1.9;word-spacing:4px">{names or '—'}</div>
+      </div>"""
+            fp_html = f"""
+    <div style="margin-bottom:26px">
+      <div style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">第4层 · 功能分层(标普500全体 {len(fdf)} 只的角色归属)</div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px">{cards}</div>
+    </div>"""
+        except Exception:
+            fp_html = ""
+
+    # 集中冲锋清单 (冲击跑赢纳指)
+    conc_html = ""
+    ccp = ROOT / "concentrated_portfolio.csv"
+    if ccp.exists():
+        try:
+            cc = pd.read_csv(ccp)
+            cs = json.load(open(ROOT / "concentrated_summary.json")) if (ROOT / "concentrated_summary.json").exists() else {}
+            crows = ""
+            for _, r in cc.iterrows():
+                w = float(r["weight_pct"])
+                crows += f"""<tr>
+                  <td style="padding:7px 10px;font-weight:400;color:#f4ecdf">{r['ticker']}</td>
+                  <td style="padding:7px 10px;min-width:110px"><div style="background:#1a140e;border-radius:3px;height:15px;position:relative"><div style="background:#c8b487;height:15px;width:{min(w/16*100,100):.0f}%;border-radius:3px"></div><span style="position:absolute;left:6px;top:0;font-size:10px;line-height:15px;color:#17130f;font-weight:400">{w:.1f}%</span></div></td>
+                  <td style="padding:7px 10px;color:#a89c8c;font-size:11px">{r.get('event_type','')}</td>
+                  <td style="padding:7px 10px;color:#a89c8c;font-size:11px">{r.get('sector','')}</td>
+                  <td style="padding:7px 10px;text-align:right;color:#8faa9a;font-size:12px;font-weight:400;font-variant-numeric:tabular-nums">{r.get('FES','')}</td>
+                </tr>"""
+            conc_html = f"""
+    <div style="margin:26px 0">
+      <div style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em;margin-bottom:6px">★ 每日集中操作清单 · 核心策略(集中10只验证过的事件标的 · 去偏差后温和跑赢纳指)</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid #3a3128;border-bottom:1px solid #3a3128;margin-bottom:14px">
+        <div style="padding:12px 16px 12px 0"><div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.12em">持股/投入</div><div style="font-size:22px;font-weight:400;color:#f4ecdf;font-family:'Financier Display',Georgia,serif;line-height:1.1">{cs.get('n','')}只 <span style="color:#8a7f70;font-size:14px">{cs.get('invested_pct',0):.0f}%</span></div></div>
+        <div style="padding:12px 16px;border-left:1px solid #3a3128"><div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.12em">组合波动</div><div style="font-size:22px;font-weight:400;color:#f4ecdf;font-family:'Financier Display',Georgia,serif;line-height:1.1">{cs.get('portfolio_vol_est',0)*100:.0f}%</div></div>
+        <div style="padding:12px 16px;border-left:1px solid #3a3128"><div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.12em">最大行业</div><div style="font-size:15px;font-weight:400;color:#f4ecdf;line-height:1.6">{cs.get('top_sector','')} {cs.get('top_sector_pct',0):.0f}%</div></div>
+        <div style="padding:12px 0 12px 16px;border-left:1px solid #3a3128"><div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.12em">去偏差回测(集中10)</div><div style="font-size:15px;font-weight:400;color:#8faa9a;line-height:1.6">24.4% · 夏普1.4<span style="color:#8a7f70;font-size:11px"> vs 纳指21%/0.99</span></div></div>
+      </div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:520px">
+        <thead><tr style="border-bottom:1px solid #3a3128">
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">标的</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">目标仓位 (Target Position)</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">事件类型 (Event Type)</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">行业</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">FES</th>
+        </tr></thead><tbody>{crows}</tbody></table></div>
+      <p style="color:#8faa9a;font-size:11.5px;margin-top:8px"><strong>操作:</strong> 这是系统每日更新的核心清单 —— 按目标仓位 (Target Position)买入这 {cs.get('n','')} 只(集中=edge的来源, 别摊太散)。去偏差(PIT成分股)回测: <strong>年化24.4% · 夏普1.39 · 回撤减半</strong>, 温和跑赢纳指。</p>
+      <p style="color:#746a5d;font-size:11px;margin-top:4px">⚠ 诚实边界: 2年样本+仍缺324只退市股 → 真实值会打折(现实约看20%上下); edge在"集中选股"不在择时/做空(16年验证: 择时只护回撤不加收益, 裸空指数长期稳输)。是"真实但温和的edge", 非圣杯。</p>
+    </div>"""
+        except Exception:
+            conc_html = ""
+
+    # 持仓管理 (Position Management): 止损 + 抽本金 (Pull Principal) + 移动止损 (Trailing Stop)
+    posmgr_html = ""
+    pap = ROOT / "position_actions.csv"
+    if pap.exists():
+        try:
+            pa = pd.read_csv(pap)
+            arows = ""
+            for _, r in pa.iterrows():
+                act = str(r.get("action", ""))
+                acol = ("#c68b83" if "止损清仓 (Stop-Loss Exit)" in act else "#c0a878" if "移动止损 (Trailing Stop)" in act
+                        else "#8faa9a" if ("抽回本金" in act or "大赢" in act) else "#a89c8c")
+                ret = float(r.get("ret_%", 0)); rcol = "#8faa9a" if ret >= 0 else "#c68b83"
+                arows += (f'<tr><td style="padding:5px 10px;color:#f4ecdf;font-weight:400">{r.get("ticker","")}</td>'
+                          f'<td style="padding:5px 10px;text-align:right;color:{rcol};font-size:11px;font-variant-numeric:tabular-nums">{ret:+.1f}%</td>'
+                          f'<td style="padding:5px 10px;color:{acol};font-size:11px;font-weight:400">{act}</td>'
+                          f'<td style="padding:5px 10px;color:#8a7f70;font-size:11px">{r.get("detail","")}</td></tr>')
+            posmgr_html = f"""
+    <div style="margin:26px 0">
+      <div style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em;margin-bottom:6px">持仓管理 (Position Management) · 止损 / 抽本金 (Pull Principal) / 移动止损 (Trailing Stop)(把"暴雷"变"小伤")</div>
+      <p style="color:#a89c8c;font-size:11.5px;margin-bottom:10px">铁律: <strong style="color:#c68b83">跌破入场-15%→止损清仓 (Stop-Loss Exit)</strong>(防暴雷) · <strong style="color:#8faa9a">涨+50%→抽回本金只留利润</strong>(house money) · <strong style="color:#c0a878">从高点回撤-15%→移动止损 (Trailing Stop)锁利</strong></p>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:520px">
+        <thead><tr style="border-bottom:1px solid #3a3128">
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">标的</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">盈亏</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">今日动作</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">说明</th>
+        </tr></thead><tbody>{arows}</tbody></table></div>
+      <p style="color:#746a5d;font-size:11px;margin-top:8px">诚实: 纸面账本, 入场价=首次进清单当日价; 真用需连券商/手动记成交价。这一层让单只暴雷≤-15%封顶, 赢家抽本金 (Pull Principal)后用利润博。</p>
+    </div>"""
+        except Exception:
+            posmgr_html = ""
+
+    # 第6层 仓位构建 + 执行成本 (作战部署)
+    deploy_html = ""
+    ppp = ROOT / "position_plan_event.csv"
+    if ppp.exists():
+        try:
+            pp = pd.read_csv(ppp)
+            ps = json.load(open(ROOT / "position_plan_summary.json")) if (ROOT / "position_plan_summary.json").exists() else {}
+            ec = pd.read_csv(ROOT / "execution_cost_plan.csv") if (ROOT / "execution_cost_plan.csv").exists() else pd.DataFrame()
+            es = json.load(open(ROOT / "execution_cost_summary.json")) if (ROOT / "execution_cost_summary.json").exists() else {}
+            cost_map = {str(r["ticker"]): r for _, r in ec.iterrows()} if not ec.empty else {}
+            prows = ""
+            for _, r in pp.iterrows():
+                tk = str(r["ticker"])
+                is_probe = "试探" in str(r.get("rationale", ""))
+                tr = "发动机轨" if "利润发动机 (Profit Engine)" in str(r.get("track", "")) else "普通轨"
+                trcol = "#c8b487" if tr == "发动机轨" else "#8a7f70"
+                badge = "试探仓" if is_probe else "正式仓"
+                bcol = "#c0a878" if is_probe else "#8faa9a"
+                c = cost_map.get(tk)
+                rt = f"{float(c['roundtrip_bps']):.0f}bps" if c is not None else "—"
+                net = f"{float(c['net_edge_%']):+.0f}%" if c is not None else "—"
+                wbar = float(r["weight_pct"])
+                prows += f"""<tr>
+                  <td style="padding:8px 10px;font-weight:400;color:#f4ecdf">{tk}</td>
+                  <td style="padding:8px 10px"><span style="color:{trcol};font-size:11px">{tr}</span></td>
+                  <td style="padding:8px 10px"><span style="background:#241f16;color:{bcol};font-size:10px;padding:2px 7px;border-radius:3px">{badge}</span></td>
+                  <td style="padding:8px 10px;min-width:110px"><div style="background:#1a140e;border-radius:3px;height:15px;position:relative"><div style="background:#c8b487;height:15px;width:{min(wbar/14*100,100):.0f}%;border-radius:3px"></div><span style="position:absolute;left:6px;top:0;font-size:10px;line-height:15px;color:#17130f;font-weight:400">{wbar:.1f}%</span></div></td>
+                  <td style="padding:8px 10px;color:#a89c8c;font-size:11px">{r.get('event_type','')}</td>
+                  <td style="padding:8px 10px;color:#a89c8c;font-size:11px">{r.get('sector','')}</td>
+                  <td style="padding:8px 10px;text-align:right;color:#8a7f70;font-size:11px;font-variant-numeric:tabular-nums">{rt}</td>
+                  <td style="padding:8px 10px;text-align:right;color:#8faa9a;font-size:11px;font-variant-numeric:tabular-nums">{net}</td>
+                </tr>"""
+            band = ps.get("band", "—")
+            deploy_html = f"""
+    <div style="margin:26px 0">
+      <div style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em;margin-bottom:12px">第6层 · 作战部署(仓位构建 × 执行成本)</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid #3a3128;border-bottom:1px solid #3a3128;margin-bottom:16px">
+        <div style="padding:14px 18px 14px 0">
+          <div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.12em">总部署 / 现金</div>
+          <div style="font-size:23px;font-weight:400;color:#f4ecdf;font-family:'Financier Display',Georgia,serif;line-height:1.1">{ps.get('invested_pct',0):.0f}% <span style="color:#8a7f70;font-size:15px">/ {ps.get('cash_pct',0):.0f}%</span></div>
+          <div style="font-size:11px;color:#a89c8c;margin-top:3px">{band} · 预算 {ps.get('total_budget_pct',0):.0f}%</div>
+        </div>
+        <div style="padding:14px 18px;border-left:1px solid #3a3128">
+          <div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.12em">组合波动估计</div>
+          <div style="font-size:23px;font-weight:400;color:#f4ecdf;font-family:'Financier Display',Georgia,serif;line-height:1.1">{ps.get('portfolio_vol_est',0)*100:.0f}%</div>
+          <div style="font-size:11px;color:#a89c8c;margin-top:3px">{ps.get('n_positions',0)} 仓 · 最大行业 {ps.get('top_sector_pct',0):.0f}%</div>
+        </div>
+        <div style="padding:14px 18px;border-left:1px solid #3a3128">
+          <div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.12em">往返摩擦</div>
+          <div style="font-size:23px;font-weight:400;color:#f4ecdf;font-family:'Financier Display',Georgia,serif;line-height:1.1">{es.get('blended_roundtrip_bps',0):.0f}<span style="font-size:14px;color:#8a7f70"> bps</span></div>
+          <div style="font-size:11px;color:#a89c8c;margin-top:3px">${es.get('total_roundtrip_cost_usd',0):,} @ ${es.get('nav_usd',0)/1e6:.0f}M</div>
+        </div>
+        <div style="padding:14px 0 14px 18px;border-left:1px solid #3a3128">
+          <div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.12em">净edge覆盖</div>
+          <div style="font-size:23px;font-weight:400;color:#8faa9a;font-family:'Financier Display',Georgia,serif;line-height:1.1">{es.get('positions_edge_survives',0)}/{es.get('positions_total',0)}</div>
+          <div style="font-size:11px;color:#a89c8c;margin-top:3px">扣成本后仍正</div>
+        </div>
+      </div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:680px">
+        <thead><tr style="border-bottom:1px solid #3a3128">
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">标的</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">轨</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">类型</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">目标仓位 (Target Position)</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">事件类型 (Event Type)</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">行业</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">往返成本</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">净edge</th>
+        </tr></thead><tbody>{prows}</tbody></table></div>
+      <p style="color:#746a5d;font-size:11px;margin-top:8px">仓位 = L0稀缺带 × 宏观 × 回撤乘数,信念(FES)×执行×逆波动定权,双轨+单票/行业上限。成本 = 半价差+平方根冲击+滑点,往返按持有窗口摊。净edge = 事件目标收益 − 往返成本。</p>
+    </div>"""
+        except Exception:
+            deploy_html = ""
+
+    # 事件层 edge 验证 (8-K 事件研究)
+    validation_html = ""
+    esp = ROOT / "edgar_event_study.json"
+    if esp.exists():
+        try:
+            es = json.load(open(esp))
+            neu = es.get("neutralized_63d", {})
+            vrows = ""
+            for et, v in sorted(neu.items(),
+                                key=lambda x: -((x[1].get("sector_neutral") or {}).get("t", -9))):
+                ma = v.get("market_adj"); sn = v.get("sector_neutral"); bn = v.get("beta_neutral")
+                if not sn:
+                    continue
+                t = sn["t"]
+                sig = "✓ 真alpha" if abs(t) >= 2 else "弱" if abs(t) >= 1 else "无"
+                scol = "#8faa9a" if abs(t) >= 2 else "#c0a878" if abs(t) >= 1 else "#8a7f70"
+                def cell(s):
+                    return f'{s["mean_ab_%"]:+.2f}% <span style="color:#8a7f70">t{s["t"]:+.1f}</span>' if s else "—"
+                vrows += f"""<tr>
+                  <td style="padding:7px 10px;color:#f4ecdf;font-size:12px">{et}</td>
+                  <td style="padding:7px 10px;text-align:right;color:#a89c8c;font-size:11px;font-variant-numeric:tabular-nums">{sn['n']:,}</td>
+                  <td style="padding:7px 10px;text-align:right;color:#a89c8c;font-size:11px;font-variant-numeric:tabular-nums">{cell(ma)}</td>
+                  <td style="padding:7px 10px;text-align:right;color:#8faa9a;font-size:12px;font-weight:400;font-variant-numeric:tabular-nums">{cell(sn)}</td>
+                  <td style="padding:7px 10px;text-align:right;color:#a89c8c;font-size:11px;font-variant-numeric:tabular-nums">{cell(bn)}</td>
+                  <td style="padding:7px 10px;color:{scol};font-size:11px">{sig}</td>
+                </tr>"""
+            # 最肥的 8-K item top5
+            items = es.get("by_item", {})
+            item_line = " · ".join(f'{v["desc"]}({v["mean_ab_%"]:+.1f}%,t{v["t"]:.1f})'
+                                   for _, v in sorted(items.items(), key=lambda x: -x[1]["t"])[:5])
+            validation_html = f"""
+    <div style="margin:26px 0">
+      <div style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em;margin-bottom:6px">事件层 EDGE 验证 · 8-K 事件研究(证明系统有真实预测力)</div>
+      <p style="color:#a89c8c;font-size:12.5px;margin-bottom:12px;max-width:760px">{es.get('total_events',0):,} 个历史 8-K 备案的 63天超额收益(无前瞻)。<strong style="color:#cabeae">关键:剔除行业和 beta 后 edge 依然显著</strong>(行业中性 (Sector-Neutral) t 甚至更高)—— 证明是真事件 alpha,不是行业/风格暴露。对照:纯价格骨架 IC 的 t 仅 1.74(不显著)。</p>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:600px">
+        <thead><tr style="border-bottom:1px solid #3a3128">
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">事件类型 (Event Type)</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">样本</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">市场调整</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8faa9a">行业中性 (Sector-Neutral)</th>
+          <th style="text-align:right;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">beta中性</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;color:#8a7f70">判定</th>
+        </tr></thead><tbody>{vrows}</tbody></table></div>
+      <p style="color:#a89c8c;font-size:11.5px;margin-top:10px"><strong style="color:#cabeae">最肥的 8-K 类型:</strong> {item_line}</p>
+      <p style="color:#746a5d;font-size:11px;margin-top:6px">诚实提示: 胜率约47-53%(小而稳的漂移,非高胜率),含已知 PEAD; 2年样本。真实、经中性化验证,但非圣杯。已反哺打分(EdgeFactor)。</p>
+    </div>"""
+        except Exception:
+            validation_html = ""
+
+    # 复盘节奏层 (周/月/季)
+    review_html = ""
+    rp = ROOT / "review_report.json"
+    if rp.exists():
+        try:
+            rv = json.load(open(rp))
+            w, m, q = rv.get("weekly", {}), rv.get("monthly", {}), rv.get("quarterly", {})
+            trg = w.get("exit_triggers", [])
+            wk = "".join(f'<li style="margin:3px 0"><strong style="color:#c68b83">{t["ticker"]}</strong> <span style="color:#a89c8c">{"/".join(t.get("flags",[]))}</span> → <span style="color:#c0a878">{t.get("action","")}</span></li>' for t in trg[:6]) \
+                 or f'<li style="color:#8faa9a;list-style:none">✓ 活跃候选均在结构之上,无退出触发</li>'
+            dec = w.get("score_decays", [])
+            wk_dec = ("恶化: " + ", ".join(f'{d["ticker"]}({d["drop"]})' for d in dec[:6])) if dec else (w.get("note") or "分数稳定")
+            hl = "".join(f'<div style="font-size:12px;color:#a89c8c;margin:3px 0">{h}</div>' for h in m.get("health", []))
+            promo = m.get("promotions", []); demo = m.get("demotions", [])
+            mig = ""
+            if promo:
+                mig += "<div style='color:#8faa9a;font-size:12px'>升池: " + ", ".join(f'{p["ticker"]}' for p in promo[:6]) + "</div>"
+            if demo:
+                mig += "<div style='color:#c68b83;font-size:12px'>降池: " + ", ".join(f'{d["ticker"]}' for d in demo[:6]) + "</div>"
+            if not mig:
+                mig = f"<div style='color:#8a7f70;font-size:11px'>{m.get('note') or '池结构稳定'}</div>"
+            et_rows = "".join(f'<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0"><span style="color:#a89c8c">{e["event_type"]}</span><span style="color:#cabeae;font-variant-numeric:tabular-nums">{e["count"]}只 · 均{e["avg_FES"]}</span></div>' for e in q.get("event_type_contribution", []))
+            recal = "".join(f'<li style="margin:3px 0;color:#a89c8c">{c}</li>' for c in q.get("recalibration", []))
+            review_html = f"""
+    <div style="margin:26px 0">
+      <div style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">复盘节奏层 · 周/月/季 (快照历史 {rv.get('history_days',1)} 天)</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
+        <div style="background:#16140f;border:1px solid #3a3128;border-top:3px solid #c68b83;padding:16px 18px;border-radius:8px">
+          <div style="font-size:13px;font-weight:400;color:#f4ecdf;margin-bottom:8px">周 · 战术(逻辑还在不在)</div>
+          <ul style="margin:0;padding-left:16px;font-size:12px;color:#a89c8c">{wk}</ul>
+          <div style="font-size:11px;color:#8a7f70;margin-top:8px">{wk_dec}</div>
+        </div>
+        <div style="background:#16140f;border:1px solid #3a3128;border-top:3px solid #c0a878;padding:16px 18px;border-radius:8px">
+          <div style="font-size:13px;font-weight:400;color:#f4ecdf;margin-bottom:8px">月 · 调仓(池该轮换吗)</div>
+          {hl}
+          <div style="margin-top:8px">{mig}</div>
+        </div>
+        <div style="background:#16140f;border:1px solid #3a3128;border-top:3px solid #8faa9a;padding:16px 18px;border-radius:8px">
+          <div style="font-size:13px;font-weight:400;color:#f4ecdf;margin-bottom:8px">季 · 系统(打法对不对)</div>
+          {et_rows}
+          <ul style="margin:8px 0 0;padding-left:16px;font-size:11px">{recal}</ul>
+        </div>
+      </div>
+    </div>"""
+        except Exception:
+            review_html = ""
+
+    pool_style = {
+        "利润发动机 (Profit Engine)":   ("#241f16", "#c8b487", "利润发动机 (Profit Engine)"),
+        "事件型爆发池": ("#1c231e", "#8faa9a", "事件爆发池 (Event Breakout Pool)"),
+        "观察/不入池":  ("#2a231b", "#9a8e80", "观察"),
+    }
+    rows = []
+    for _, r in df.head(40).iterrows():
+        bg, fg, lbl = pool_style.get(str(r.get("pool", "")), ("#2a231b", "#9a8e80", "观察"))
+        lnmpc = " · ".join(f"{k}{int(r[k])}" for k in ("L", "N", "M", "P", "C") if k in r and pd.notna(r[k]))
+        life = life_m.get(str(r["ticker"]), "—")
+        rows.append(f"""<tr>
+          <td style="padding:9px 12px;font-weight:400;color:#f4ecdf">{r['ticker']}</td>
+          <td style="padding:9px 12px"><span style="background:{bg};color:{fg};font-size:10px;font-weight:400;padding:3px 9px;border-radius:4px;white-space:nowrap">{lbl}</span></td>
+          <td style="padding:9px 12px;color:#9a8e80;font-size:12px">{r.get('event_type','—')}</td>
+          <td style="padding:9px 12px;text-align:right;color:#c8b487;font-weight:400;font-variant-numeric:tabular-nums">{r.get('FinalEventScore','—')}</td>
+          <td style="padding:9px 12px;color:#8a7f70;font-size:11px;font-variant-numeric:tabular-nums">{lnmpc}</td>
+          <td style="padding:9px 12px;color:#7a8290;font-size:11px">{life}</td>
+          <td style="padding:9px 12px;color:#9a8e80;font-size:11px">{r.get('ExecutionScore','—')}</td>
+          <td style="padding:9px 12px;color:#9a8e80;font-size:11px">{r.get('hold_window','—')}</td>
+          <td style="padding:9px 12px;color:#8a7f70;font-size:11px">交{r.get('exit_trade%','?')}/逻{r.get('exit_logic%','?')}</td>
+        </tr>""")
+
+    # FT 头版: 日期 · 市场姿态判词 · 头号主线 (Top Theme)
+    _today = pd.Timestamp.now().strftime("%Y年%-m月%-d日")
+    _mode = "—"
+    try:
+        _mode = json.load(open(ROOT / "macro_intel_scorecard.json")).get("宏观模式 (Macro Mode)", "—")
+    except Exception:
+        pass
+    _top_tk = str(df.iloc[0]["ticker"]) if len(df) else "—"
+    _top_et = str(df.iloc[0].get("event_type", "")) if len(df) else ""
+    _top_fes = float(df.iloc[0]["FinalEventScore"]) if len(df) else 0.0
+    _posture = f"{sw_state} · 建议进攻仓位 {sw_pos}"
+    _stand = (f"宏观处于「{_mode}」模式,宏观过滤 (Macro Filter) {mf:.2f}。全场 {len(df)} 只候选中,"
+              f"{_top_tk}({_top_et})以 FinalEventScore {_top_fes:.0f} 领跑。"
+              f"当前{sw_state},{'纪律优先于出手,允许高现金。' if n_pe+n_ev<=2 else '择优布局利润发动机 (Profit Engine)级机会。'}")
+    return f"""<section id="sec-eventengine" class="tab-section">
+  <div class="container">
+    <div style="border-top:2px solid #c8b487;padding-top:12px;display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <span style="font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:#c8b487;font-weight:400">Canyon Intelligence · 利润发动机 (Profit Engine)作战台 (War Room)</span>
+      <span style="font-size:11px;letter-spacing:.06em;color:#8a7f70;text-transform:uppercase">{_today} · 标普500 事件驱动版</span>
+    </div>
+    <h2 class="section-head" style="font-size:42px;line-height:1.08;max-width:900px;margin:14px 0 12px">{_posture}</h2>
+    <p style="color:#cabeae;font-size:15.5px;line-height:1.62;max-width:700px;margin-bottom:6px;font-family:'Financier Display','Iowan Old Style',Georgia,serif">{_stand}</p>
+    <p style="color:#8a7f70;font-size:12px;max-width:700px;margin-bottom:22px">依据《美股主动投资系统手册》第0/5/7/9/10层 · FinalEventScore = EventScore × 执行过滤 × 宏观过滤 (Macro Filter) · L/N/M/P/C 五因子均由真实数据驱动(Momentum/催化日历/DCF估值/新闻主体/分析师确认)。</p>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid #3a3128;border-bottom:1px solid #3a3128;margin-bottom:30px">
+      <div style="padding:16px 20px 16px 0">
+        <div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em;margin-bottom:8px">第0层 · 机会稀缺度</div>
+        <div style="font-size:26px;font-weight:400;color:{sw_color};font-family:'Financier Display',Georgia,serif;line-height:1">{sw_state}</div>
+        <div style="font-size:12px;color:#a89c8c;margin-top:5px">进攻仓位 {sw_pos}</div>
+      </div>
+      <div style="padding:16px 20px;border-left:1px solid #3a3128">
+        <div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em;margin-bottom:8px">利润发动机 (Profit Engine) / 爆发池</div>
+        <div style="font-size:26px;font-weight:400;color:#c8b487;font-family:'Financier Display',Georgia,serif;line-height:1;font-variant-numeric:tabular-nums">{n_pe}<span style="color:#8a7f70;font-size:18px"> / </span><span style="color:#8faa9a">{n_ev}</span></div>
+        <div style="font-size:12px;color:#a89c8c;margin-top:5px">共 {len(df)} 只候选</div>
+      </div>
+      <div style="padding:16px 20px;border-left:1px solid #3a3128">
+        <div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em;margin-bottom:8px">第1层 · 宏观过滤 (Macro Filter)</div>
+        <div style="font-size:26px;font-weight:400;color:#f4ecdf;font-family:'Financier Display',Georgia,serif;line-height:1;font-variant-numeric:tabular-nums">{mf:.2f}</div>
+        <div style="font-size:12px;color:#a89c8c;margin-top:5px">{_mode} · {'风险偏好正常' if mf>=0.8 else '偏防守'}</div>
+      </div>
+      <div style="padding:16px 0 16px 20px;border-left:1px solid #3a3128">
+        <div style="font-size:10px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em;margin-bottom:8px">头号主线 (Top Theme)</div>
+        <div style="font-size:26px;font-weight:400;color:#f4ecdf;font-family:'Financier Display',Georgia,serif;line-height:1">{_top_tk}</div>
+        <div style="font-size:12px;color:#a89c8c;margin-top:5px">FES {_top_fes:.0f} · {_top_et}</div>
+      </div>
+    </div>
+    {_intraday_panel()}
+    {_fred_macro_panel()}
+    {_alphavantage_news_panel()}
+    {intel_html}
+    {src_html}
+    {rot_html}
+    {etf_html}
+    {fp_html}
+    {_pead_panel()}
+    {_pnl_contrib_panel()}
+    <div style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">第7层 · 事件爆发池 (Event Breakout Pool)排序(FinalEventScore 前 40 / 共 {len(df)} 只)</div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:780px">
+      <thead><tr style="border-bottom:2px solid #453a2c">
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;color:#8a7f70">标的</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;color:#8a7f70">池</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;color:#8a7f70">事件类型 (Event Type)</th>
+        <th style="text-align:right;padding:8px 12px;font-size:10px;text-transform:uppercase;color:#8a7f70">FinalScore</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;color:#8a7f70">L/N/M/P/C</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;color:#8a7f70">生命周期 (Lifecycle)/风格</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;color:#8a7f70">执行分</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;color:#8a7f70">持有窗口</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;color:#8a7f70">退出(交/逻)</th>
+      </tr></thead><tbody>{''.join(rows)}</tbody></table></div>
+    {conc_html}
+    {posmgr_html}
+    {deploy_html}
+    {validation_html}
+    {review_html}
+    <p style="color:#746a5d;font-size:11px;margin-top:16px">研究/纸面用途 · 无券商连接 · 底库=标普500全体,系统自动分事件类型 (Event Type)/生命周期 (Lifecycle)/功能池并排序; L/N/M/P/C 可人工按手册标准精修于 event_pool.csv</p>
   </div>
 </section>"""
 
@@ -4937,6 +5816,8 @@ def _build_data_health_tab() -> str:
         ("wf_oos_summary.csv",          "Walk-forward OOS",      "Quant QC",          14),
         ("watchlist.json",              "Watchlist",             "Watchlist",         14),
         ("short_squeeze_signal.csv",    "Short squeeze",         "Short Scanner",     3),
+        ("rigorous_backtest.json",      "Honest backtest",       "Quant QC",          2),
+        ("sp500_price_history_deep.csv","Deep price history",    "Backtests",         7),
     ]
 
     def _check(fname, max_days):
@@ -4981,19 +5862,19 @@ def _build_data_health_tab() -> str:
     results.sort(key=lambda r: (order[r[0]], r[1]))
 
     badge = {
-        "ok":     ('#12291c', '#5fd39a', '● LIVE'),
-        "stale":  ('#2a2109', '#d9b458', '● STALE'),
-        "broken": ('#2c1315', '#ec8080', '● BROKEN'),
+        "ok":     ('#1c231e', '#8faa9a', '● LIVE'),
+        "stale":  ('#241f16', '#c0a878', '● STALE'),
+        "broken": ('#251a17', '#c68b83', '● BROKEN'),
     }
     for status, name, section, detail, age_str, fname in results:
         bg, fg, lbl = badge[status]
         rows.append(f"""<tr>
-          <td style="padding:9px 12px"><span style="background:{bg};color:{fg};font-size:10px;font-weight:700;padding:3px 9px;border-radius:3px;white-space:nowrap">{lbl}</span></td>
-          <td style="padding:9px 12px;font-weight:600;color:#e8eaef">{name}</td>
-          <td style="padding:9px 12px;color:#868d9b;font-size:12px">{section}</td>
+          <td style="padding:9px 12px"><span style="background:{bg};color:{fg};font-size:10px;font-weight:400;padding:3px 9px;border-radius:3px;white-space:nowrap">{lbl}</span></td>
+          <td style="padding:9px 12px;font-weight:400;color:#f4ecdf">{name}</td>
+          <td style="padding:9px 12px;color:#9a8e80;font-size:12px">{section}</td>
           <td style="padding:9px 12px;color:{fg};font-size:12px">{detail}</td>
-          <td style="padding:9px 12px;color:#727a89;font-size:12px;font-variant-numeric:tabular-nums">{age_str}</td>
-          <td style="padding:9px 12px;color:#5c6474;font-size:11px;font-family:monospace">{fname}</td>
+          <td style="padding:9px 12px;color:#8a7f70;font-size:12px;font-variant-numeric:tabular-nums">{age_str}</td>
+          <td style="padding:9px 12px;color:#746a5d;font-size:11px;font-family:monospace">{fname}</td>
         </tr>""")
 
     total = len(SOURCES)
@@ -5002,35 +5883,35 @@ def _build_data_health_tab() -> str:
     <p class="eyebrow">System · Data Health</p>
     <h2 class="section-head">Data Integrity Monitor</h2>
     <div class="rule"></div>
-    <p style="color:#9aa0ac;font-size:13px;margin-bottom:24px;max-width:640px">Every panel on this dashboard reads from a data file. This monitor shows which are <strong style="color:#5fd39a">live</strong>, which are <strong style="color:#d9b458">stale</strong> (old data still displayed), and which are <strong style="color:#ec8080">broken</strong> (missing/empty). Trust panels marked LIVE; treat STALE and BROKEN sections with suspicion.</p>
+    <p style="color:#a89c8c;font-size:13px;margin-bottom:24px;max-width:640px">Every panel on this dashboard reads from a data file. This monitor shows which are <strong style="color:#8faa9a">live</strong>, which are <strong style="color:#c0a878">stale</strong> (old data still displayed), and which are <strong style="color:#c68b83">broken</strong> (missing/empty). Trust panels marked LIVE; treat STALE and BROKEN sections with suspicion.</p>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:24px">
-      <div style="background:#12291c;border:1px solid #1d4a30;padding:18px 20px;border-radius:6px">
-        <div style="font-size:32px;font-weight:700;color:#5fd39a;line-height:1">{n_ok}</div>
-        <div style="font-size:11px;color:#5fd39a;text-transform:uppercase;letter-spacing:1px;margin-top:4px">Live</div>
+      <div style="background:#1c231e;border:1px solid #1d4a30;padding:18px 20px;border-radius:6px">
+        <div style="font-size:32px;font-weight:400;color:#8faa9a;line-height:1">{n_ok}</div>
+        <div style="font-size:11px;color:#8faa9a;text-transform:uppercase;letter-spacing:1px;margin-top:4px">Live</div>
       </div>
-      <div style="background:#2a2109;border:1px solid #4a3a10;padding:18px 20px;border-radius:6px">
-        <div style="font-size:32px;font-weight:700;color:#d9b458;line-height:1">{n_stale}</div>
-        <div style="font-size:11px;color:#d9b458;text-transform:uppercase;letter-spacing:1px;margin-top:4px">Stale</div>
+      <div style="background:#241f16;border:1px solid #4a3a10;padding:18px 20px;border-radius:6px">
+        <div style="font-size:32px;font-weight:400;color:#c0a878;line-height:1">{n_stale}</div>
+        <div style="font-size:11px;color:#c0a878;text-transform:uppercase;letter-spacing:1px;margin-top:4px">Stale</div>
       </div>
-      <div style="background:#2c1315;border:1px solid #4a1d1d;padding:18px 20px;border-radius:6px">
-        <div style="font-size:32px;font-weight:700;color:#ec8080;line-height:1">{n_broken}</div>
-        <div style="font-size:11px;color:#ec8080;text-transform:uppercase;letter-spacing:1px;margin-top:4px">Broken</div>
+      <div style="background:#251a17;border:1px solid #4a1d1d;padding:18px 20px;border-radius:6px">
+        <div style="font-size:32px;font-weight:400;color:#c68b83;line-height:1">{n_broken}</div>
+        <div style="font-size:11px;color:#c68b83;text-transform:uppercase;letter-spacing:1px;margin-top:4px">Broken</div>
       </div>
     </div>
     <div style="overflow-x:auto">
     <table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead><tr style="border-bottom:2px solid #2f3a52">
-        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#727a89">Status</th>
-        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#727a89">Data</th>
-        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#727a89">Feeds panel</th>
-        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#727a89">Detail</th>
-        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#727a89">Updated</th>
-        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#727a89">File</th>
+      <thead><tr style="border-bottom:2px solid #453a2c">
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8a7f70">Status</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8a7f70">Data</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8a7f70">Feeds panel</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8a7f70">Detail</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8a7f70">Updated</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8a7f70">File</th>
       </tr></thead>
       <tbody>{''.join(rows)}</tbody>
     </table>
     </div>
-    <p style="color:#5c6474;font-size:11px;margin-top:16px">{n_ok}/{total} sources live · scanned at build time ({datetime.now().strftime('%Y-%m-%d %H:%M')})</p>
+    <p style="color:#746a5d;font-size:11px;margin-top:16px">{n_ok}/{total} sources live · scanned at build time ({datetime.now().strftime('%Y-%m-%d %H:%M')})</p>
   </div>
 </section>"""
 
@@ -5068,14 +5949,14 @@ def _build_heatmap_tab() -> str:
     <h2 class="section-head">Daily return by stock &amp; sector — sized by market cap, scored by Canyon</h2>
     <div class="rule"></div>
     <div id="hm-controls" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center">
-      <span style="font-size:11px;color:#999;font-weight:600;text-transform:uppercase;letter-spacing:.8px;margin-right:4px">Sector</span>
+      <span style="font-size:11px;color:#999;font-weight:400;text-transform:uppercase;letter-spacing:.8px;margin-right:4px">Sector</span>
       <button class="hm-btn active" data-sector="">All</button>
     </div>
     <div style="position:relative;background:#111;border-radius:8px;overflow:hidden">
       <canvas id="hm-canvas" style="display:block;width:100%;height:900px"></canvas>
       <div id="hm-tooltip" style="display:none;position:absolute;pointer-events:none;background:rgba(15,15,15,.96);border:1px solid #444;border-radius:7px;padding:10px 14px;font-size:12px;color:#EEE;min-width:170px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,.5)">
-        <div id="hm-tt-ticker" style="font-size:16px;font-weight:800;color:#fff;margin-bottom:3px"></div>
-        <div id="hm-tt-return" style="font-size:14px;font-weight:700;margin-bottom:3px"></div>
+        <div id="hm-tt-ticker" style="font-size:16px;font-weight:500;color:#fff;margin-bottom:3px"></div>
+        <div id="hm-tt-return" style="font-size:14px;font-weight:400;margin-bottom:3px"></div>
         <div id="hm-tt-score"  style="font-size:11px;color:#AAA"></div>
         <div id="hm-tt-sector" style="font-size:11px;color:#777;margin-top:2px"></div>
         <div id="hm-tt-signal" style="font-size:11px;color:#AAA;margin-top:2px"></div>
@@ -5094,7 +5975,7 @@ def _build_heatmap_tab() -> str:
   (function() {{
     const RAW = {heatmap_json};
     const style = document.createElement('style');
-    style.textContent = `.hm-btn{{background:#2A2A2A;border:1px solid #444;color:#CCC;padding:4px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;letter-spacing:.3px;transition:background .12s,color .12s}}.hm-btn:hover,.hm-btn.active{{background:#B8943F;border-color:#B8943F;color:#fff}}`;
+    style.textContent = `.hm-btn{{background:#2A2A2A;border:1px solid #444;color:#CCC;padding:4px 10px;border-radius:4px;font-size:11px;font-weight:400;cursor:pointer;letter-spacing:.3px;transition:background .12s,color .12s}}.hm-btn:hover,.hm-btn.active{{background:#c8b487;border-color:#c8b487;color:#fff}}`;
     document.head.appendChild(style);
 
     const sectors = [...new Set(RAW.map(d => d.sector))].sort();
@@ -5227,7 +6108,7 @@ def _build_heatmap_tab() -> str:
         if (sw > 32) {{
           ctx.fillStyle = 'rgba(0,0,0,.62)';
           ctx.fillRect(sx, 0, sw-1, labelH+3);
-          ctx.fillStyle = '#DDD';
+          ctx.fillStyle = '#241f18';
           const lfs = Math.min(9.5, sw / (secName.length * 0.65));
           ctx.font = `bold ${{lfs.toFixed(1)}}px Inter,Arial,sans-serif`;
           ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
@@ -5291,7 +6172,7 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
         return """
 <div style="padding:60px 24px;text-align:center;color:#888">
   <p style="font-size:48px;margin-bottom:12px">🧠</p>
-  <p style="font-size:16px;font-weight:700;color:#1B2A4A;margin-bottom:8px">Famous Investor Holdings</p>
+  <p style="font-size:16px;font-weight:400;color:#1B2A4A;margin-bottom:8px">Famous Investor Holdings</p>
   <p style="font-size:13px">Run <code>python step_famous_holdings.py</code> to fetch 13F filings from SEC EDGAR.</p>
   <p style="font-size:11px;color:#aaa;margin-top:8px">Berkshire · Pershing Square · Scion · Appaloosa · Duquesne · Coatue · Viking · Tiger Global · Greenlight · Third Point</p>
 </div>"""
@@ -5304,23 +6185,23 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
     # ── Style colours for each investment style
     STYLE_COLORS = {
         "Value/Concentrated":   "#1B2A4A",
-        "Activist/Concentrated":"#2E4A7A",
-        "Contrarian/Value":     "#5B2D8E",
+        "Activist/Concentrated":"#4a5561",
+        "Contrarian/Value":     "#5a5470",
         "Macro/Event-driven":   "#8B3A3A",
         "Macro/Momentum":       "#8B6914",
         "Tech/Growth":          "#1A6B3C",
-        "Long/Short Equity":    "#195A6E",
+        "Long/Short Equity":    "#4c5f65",
         "Tech/Growth/VC":       "#1D6B45",
         "Value/Short":          "#6B3E1D",
-        "Activist/Event":       "#3A5C8E",
+        "Activist/Event":       "#55606c",
     }
 
     # ── Change flag colours
     def _flag_style(flag):
         return {
-            "NEW":  "background:#E8F5E9;color:#1B7A3B;font-weight:700",
-            "ADD":  "background:#E3F2FD;color:#1565C0;font-weight:700",
-            "TRIM": "background:#FFF3E0;color:#E65100;font-weight:700",
+            "NEW":  "background:#241f18;color:#1B7A3B;font-weight:400",
+            "ADD":  "background:#202832;color:#5f7480;font-weight:400",
+            "TRIM": "background:#FFF3E0;color:#E65100;font-weight:400",
             "HOLD": "background:#F5F5F5;color:#666",
         }.get(flag, "background:#F5F5F5;color:#666")
 
@@ -5334,7 +6215,7 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
 
         top_rows = ""
         for i, h in enumerate(tops):
-            rank_badge = f'<span style="width:18px;height:18px;border-radius:50%;background:{color};color:#fff;font-size:9px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;margin-right:6px">{i+1}</span>'
+            rank_badge = f'<span style="width:18px;height:18px;border-radius:50%;background:{color};color:#fff;font-size:9px;font-weight:400;display:inline-flex;align-items:center;justify-content:center;margin-right:6px">{i+1}</span>'
             pct_bar    = f'<div style="height:3px;background:{color};width:{min(h["pct_portfolio"]*3.5,100):.0f}%;border-radius:2px;margin-top:3px;opacity:.6"></div>'
             flag_s     = _flag_style(h.get("change_flag", "HOLD"))
             chg_txt    = ""
@@ -5342,22 +6223,22 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
                 chg_txt = f'<span style="font-size:9px;color:{"#1B7A3B" if h["change_pct"]>0 else "#C0392B"}">{h["change_pct"]:+.0f}%</span> '
 
             top_rows += f"""<tr>
-  <td style="padding:5px 6px;border-bottom:1px solid #f0f0f0">{rank_badge}<strong style="font-size:12px">{h['ticker']}</strong></td>
-  <td style="padding:5px 6px;border-bottom:1px solid #f0f0f0;font-size:11px;color:#666;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{h['name'][:22]}</td>
-  <td style="padding:5px 6px;border-bottom:1px solid #f0f0f0;text-align:right;font-size:11px;font-variant-numeric:tabular-nums">${h['value_m']:,.0f}M</td>
-  <td style="padding:5px 6px;border-bottom:1px solid #f0f0f0;text-align:right;font-size:11px;font-variant-numeric:tabular-nums">{h['pct_portfolio']:.1f}%</td>
-  <td style="padding:5px 6px;border-bottom:1px solid #f0f0f0"><span style="font-size:9px;padding:2px 5px;border-radius:3px;{flag_s}">{h.get('change_flag','?')}</span></td>
+  <td style="padding:5px 6px;border-bottom:1px solid #241f18">{rank_badge}<strong style="font-size:12px">{h['ticker']}</strong></td>
+  <td style="padding:5px 6px;border-bottom:1px solid #241f18;font-size:11px;color:#666;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{h['name'][:22]}</td>
+  <td style="padding:5px 6px;border-bottom:1px solid #241f18;text-align:right;font-size:11px;font-variant-numeric:tabular-nums">${h['value_m']:,.0f}M</td>
+  <td style="padding:5px 6px;border-bottom:1px solid #241f18;text-align:right;font-size:11px;font-variant-numeric:tabular-nums">{h['pct_portfolio']:.1f}%</td>
+  <td style="padding:5px 6px;border-bottom:1px solid #241f18"><span style="font-size:9px;padding:2px 5px;border-radius:3px;{flag_s}">{h.get('change_flag','?')}</span></td>
 </tr>"""
             top_rows += f'<tr><td colspan="5" style="padding:0 6px 4px"><div style="height:3px;background:{color};width:{min(h["pct_portfolio"]*4,100):.0f}%;border-radius:2px;opacity:.35"></div></td></tr>'
 
         # New buys pill row
         new_pills = " ".join(
-            f'<span style="display:inline-block;padding:3px 8px;border-radius:20px;background:#E8F5E9;color:#1B7A3B;font-size:10px;font-weight:700;margin:2px">{h["ticker"]}</span>'
+            f'<span style="display:inline-block;padding:3px 8px;border-radius:20px;background:#241f18;color:#1B7A3B;font-size:10px;font-weight:400;margin:2px">{h["ticker"]}</span>'
             for h in new_b
         ) if new_b else '<span style="font-size:11px;color:#aaa">—</span>'
 
         trim_pills = " ".join(
-            f'<span style="display:inline-block;padding:3px 8px;border-radius:20px;background:#FFF3E0;color:#E65100;font-size:10px;font-weight:700;margin:2px">{h["ticker"]}</span>'
+            f'<span style="display:inline-block;padding:3px 8px;border-radius:20px;background:#FFF3E0;color:#E65100;font-size:10px;font-weight:400;margin:2px">{h["ticker"]}</span>'
             for h in trims
         ) if trims else '<span style="font-size:11px;color:#aaa">—</span>'
 
@@ -5367,7 +6248,7 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
             sector_bars += f"""
 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
   <div style="width:80px;font-size:9px;color:#666;text-align:right;flex-shrink:0">{sec[:12]}</div>
-  <div style="flex:1;background:#f0f0f0;border-radius:2px;height:8px">
+  <div style="flex:1;background:#241f18;border-radius:2px;height:8px">
     <div style="height:8px;border-radius:2px;background:{color};width:{min(pct*2.5,100):.0f}%;opacity:.75"></div>
   </div>
   <div style="width:32px;font-size:9px;font-variant-numeric:tabular-nums;color:#888">{pct:.0f}%</div>
@@ -5376,25 +6257,25 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
         aum_b = fd.get("total_aum_m", 0) / 1000
         # Concentration: top-5 as % of portfolio
         top5_pct = sum(h["pct_portfolio"] for h in tops[:5]) if tops else 0
-        conc_col = "#C0392B" if top5_pct > 70 else ("#B8943F" if top5_pct > 50 else "#1B7A3B")
+        conc_col = "#C0392B" if top5_pct > 70 else ("#c8b487" if top5_pct > 50 else "#1B7A3B")
         n_pos = fd.get("n_positions", 0)
         # Estimated turnover: new_buys + trims as % of portfolio
         n_changes = len(fd.get("new_buys",[])) + len(fd.get("trims",[]))
         turnover_est = f"~{n_changes/max(n_pos,1)*100:.0f}% quarterly" if n_pos else "—"
 
         fund_cards += f"""
-<div class="fh-fund-card" style="border:1px solid #E2E0DC;border-radius:10px;overflow:hidden;background:#fff;
+<div class="fh-fund-card" style="border:1px solid #241f18;border-radius:10px;overflow:hidden;background:#fff;
   box-shadow:0 2px 8px rgba(0,0,0,.06);display:flex;flex-direction:column">
 
   <!-- Fund header -->
   <div style="background:{color};color:#fff;padding:16px 18px 12px">
     <div style="display:flex;justify-content:space-between;align-items:flex-start">
       <div>
-        <div style="font-size:13px;font-weight:800;letter-spacing:.5px">{fund_name}</div>
+        <div style="font-size:13px;font-weight:500;letter-spacing:.5px">{fund_name}</div>
         <div style="font-size:11px;opacity:.75;margin-top:2px">{fd.get('manager','')}</div>
       </div>
       <div style="text-align:right">
-        <div style="font-size:18px;font-weight:800;font-variant-numeric:tabular-nums">${aum_b:.1f}B</div>
+        <div style="font-size:18px;font-weight:500;font-variant-numeric:tabular-nums">${aum_b:.1f}B</div>
         <div style="font-size:9px;opacity:.65">{n_pos} positions</div>
       </div>
     </div>
@@ -5411,15 +6292,15 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
 
   <!-- Holdings table -->
   <div style="flex:1;padding:12px 0;overflow:hidden">
-    <div style="padding:0 14px 6px;font-size:9px;font-weight:700;letter-spacing:1px;color:#888;text-transform:uppercase">Top Holdings</div>
+    <div style="padding:0 14px 6px;font-size:9px;font-weight:400;letter-spacing:1px;color:#888;text-transform:uppercase">Top Holdings</div>
     <table style="width:100%;border-collapse:collapse">
       <thead>
         <tr style="background:#FAFAFA">
-          <th style="padding:4px 6px;font-size:9px;color:#888;text-align:left;font-weight:600">Ticker</th>
-          <th style="padding:4px 6px;font-size:9px;color:#888;text-align:left;font-weight:600">Name</th>
-          <th style="padding:4px 6px;font-size:9px;color:#888;text-align:right;font-weight:600">Value</th>
-          <th style="padding:4px 6px;font-size:9px;color:#888;text-align:right;font-weight:600">% Port</th>
-          <th style="padding:4px 6px;font-size:9px;color:#888;font-weight:600">Chg</th>
+          <th style="padding:4px 6px;font-size:9px;color:#888;text-align:left;font-weight:400">Ticker</th>
+          <th style="padding:4px 6px;font-size:9px;color:#888;text-align:left;font-weight:400">Name</th>
+          <th style="padding:4px 6px;font-size:9px;color:#888;text-align:right;font-weight:400">Value</th>
+          <th style="padding:4px 6px;font-size:9px;color:#888;text-align:right;font-weight:400">% Port</th>
+          <th style="padding:4px 6px;font-size:9px;color:#888;font-weight:400">Chg</th>
         </tr>
       </thead>
       <tbody>{top_rows}</tbody>
@@ -5427,31 +6308,31 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
   </div>
 
   <!-- Recent moves -->
-  <div style="padding:10px 14px;border-top:1px solid #f0f0f0;background:#FAFAFA">
-    <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:4px">New Buys</div>
+  <div style="padding:10px 14px;border-top:1px solid #241f18;background:#FAFAFA">
+    <div style="font-size:9px;font-weight:400;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:4px">New Buys</div>
     <div>{new_pills}</div>
-    <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:#888;text-transform:uppercase;margin:8px 0 4px">Trimmed / Sold</div>
+    <div style="font-size:9px;font-weight:400;letter-spacing:1px;color:#888;text-transform:uppercase;margin:8px 0 4px">Trimmed / Sold</div>
     <div>{trim_pills}</div>
   </div>
 
   <!-- Sector breakdown -->
-  {f'<div style="padding:10px 14px 12px;border-top:1px solid #f0f0f0"><div style="font-size:9px;font-weight:700;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:6px">Sector Exposure</div>{sector_bars}</div>' if sector_bars else ''}
+  {f'<div style="padding:10px 14px 12px;border-top:1px solid #241f18"><div style="font-size:9px;font-weight:400;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:6px">Sector Exposure</div>{sector_bars}</div>' if sector_bars else ''}
 </div>"""
 
     # ── Consensus heatmap: stocks owned by 2+ funds — enriched with valuation
     consensus_rows = ""
     for c in consensus[:15]:
         n     = c["n_funds"]
-        heat  = ["", "#F5F5F5", "#E3F2FD", "#BBDEFB", "#90CAF9", "#42A5F5", "#2196F3", "#1976D2", "#1565C0", "#0D47A1"]
+        heat  = ["", "#F5F5F5", "#202832", "#243039", "#9aaab0", "#42A5F5", "#2196F3", "#1976D2", "#5f7480", "#0D47A1"]
         bg    = heat[min(n, len(heat)-1)]
         canyon= "★" if c.get("canyon_owns") else ""
-        cx    = "color:#B8943F;font-weight:700" if canyon else ""
+        cx    = "color:#c8b487;font-weight:400" if canyon else ""
 
         # Pull valuation from profiles for richer display
         prof = _STOCK_PROFILES.get(c["ticker"], {})
         pe   = prof.get("pe_fwd", "—")
         chain_layer = prof.get("chain_layer", "")
-        chain_pill_col = {"upstream":"#1565C0","midstream":"#1B7A3B","downstream":"#8B3A3A"}.get(chain_layer,"#888")
+        chain_pill_col = {"upstream":"#5f7480","midstream":"#1B7A3B","downstream":"#8B3A3A"}.get(chain_layer,"#888")
         chain_pill_lbl = {"upstream":"上游","midstream":"中游","downstream":"下游"}.get(chain_layer,"")
 
         # Conviction: total value as % of tracked AUM
@@ -5463,26 +6344,26 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
             for f in c.get("funds", [])
         )
         consensus_rows += f"""
-<tr style="border-bottom:1px solid #F0F0F0">
+<tr style="border-bottom:1px solid #241f18">
   <td style="padding:6px 8px;white-space:nowrap">
-    <div style="font-weight:800;font-size:13px;color:#1B2A4A">{c['ticker']}</div>
+    <div style="font-weight:500;font-size:13px;color:#1B2A4A">{c['ticker']}</div>
     {f'<div style="font-size:8px;{cx}">{canyon} Canyon</div>' if canyon else ''}
     {f'<span style="font-size:7px;padding:1px 4px;border-radius:2px;background:{chain_pill_col};color:#fff">{chain_pill_lbl}</span>' if chain_pill_lbl else ''}
   </td>
   <td style="padding:6px 8px">
     <div style="display:flex;align-items:center;gap:5px;margin-bottom:3px">
       <div style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;
-        border-radius:50%;background:{'#1565C0' if n>=4 else '#90CAF9' if n>=3 else '#BBDEFB'};
-        color:#fff;font-size:10px;font-weight:800;flex-shrink:0">{n}</div>
+        border-radius:50%;background:{'#5f7480' if n>=4 else '#9aaab0' if n>=3 else '#243039'};
+        color:#fff;font-size:10px;font-weight:500;flex-shrink:0">{n}</div>
       <div style="font-size:8px;line-height:1.8">{fund_names}</div>
     </div>
     <div style="background:#EEE;border-radius:2px;height:4px;width:100%">
-      <div style="height:4px;border-radius:2px;background:#1565C0;width:{min(conviction_pct*8,100):.0f}%"></div>
+      <div style="height:4px;border-radius:2px;background:#5f7480;width:{min(conviction_pct*8,100):.0f}%"></div>
     </div>
     <div style="font-size:7px;color:#999;margin-top:1px">{conviction_pct:.2f}% of tracked AUM</div>
   </td>
   <td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap">
-    <div style="font-size:11px;font-weight:700;color:#1B2A4A">${c['total_value_m']:,.0f}M</div>
+    <div style="font-size:11px;font-weight:400;color:#1B2A4A">${c['total_value_m']:,.0f}M</div>
     <div style="font-size:9px;color:#888">fwd P/E: <strong>{pe}×</strong></div>
   </td>
 </tr>"""
@@ -5493,11 +6374,11 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
         for c in overlap[:8]:
             overlap_html += f"""
 <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;
-  border-bottom:1px solid #f0f0f0">
-  <div style="font-weight:700;font-size:13px;color:#1B2A4A">{c['ticker']}</div>
+  border-bottom:1px solid #241f18">
+  <div style="font-weight:400;font-size:13px;color:#1B2A4A">{c['ticker']}</div>
   <div style="font-size:11px;color:#666">{c['n_funds']} top funds own this</div>
   <div style="font-size:11px;font-variant-numeric:tabular-nums;color:#888">${c['total_value_m']:,.0f}M</div>
-  <span style="padding:3px 8px;border-radius:20px;background:#E8F5E9;color:#1B7A3B;font-size:10px;font-weight:700">★ OVERLAP</span>
+  <span style="padding:3px 8px;border-radius:20px;background:#241f18;color:#1B7A3B;font-size:10px;font-weight:400">★ OVERLAP</span>
 </div>"""
     else:
         overlap_html = '<p style="font-size:12px;color:#888;padding:16px">No Canyon/smart-money overlap found in current data.</p>'
@@ -5528,19 +6409,19 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
   <!-- Summary bar -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:28px">
     <div style="background:#1B2A4A;color:#fff;padding:16px 18px;border-radius:8px;text-align:center">
-      <div style="font-size:24px;font-weight:800;font-variant-numeric:tabular-nums">{len(funds)}</div>
+      <div style="font-size:24px;font-weight:500;font-variant-numeric:tabular-nums">{len(funds)}</div>
       <div style="font-size:10px;opacity:.7;letter-spacing:.8px;text-transform:uppercase;margin-top:2px">Top Funds Tracked</div>
     </div>
-    <div style="background:#fff;border:1px solid #E2E0DC;padding:16px 18px;border-radius:8px;text-align:center">
-      <div style="font-size:24px;font-weight:800;color:#1B2A4A;font-variant-numeric:tabular-nums">${total_aum:.0f}B</div>
+    <div style="background:#fff;border:1px solid #241f18;padding:16px 18px;border-radius:8px;text-align:center">
+      <div style="font-size:24px;font-weight:500;color:#1B2A4A;font-variant-numeric:tabular-nums">${total_aum:.0f}B</div>
       <div style="font-size:10px;color:#888;letter-spacing:.8px;text-transform:uppercase;margin-top:2px">Total AUM Tracked</div>
     </div>
-    <div style="background:#fff;border:1px solid #E2E0DC;padding:16px 18px;border-radius:8px;text-align:center">
-      <div style="font-size:24px;font-weight:800;color:#1565C0;font-variant-numeric:tabular-nums">{n_consensus}</div>
+    <div style="background:#fff;border:1px solid #241f18;padding:16px 18px;border-radius:8px;text-align:center">
+      <div style="font-size:24px;font-weight:500;color:#5f7480;font-variant-numeric:tabular-nums">{n_consensus}</div>
       <div style="font-size:10px;color:#888;letter-spacing:.8px;text-transform:uppercase;margin-top:2px">3+ Fund Consensus</div>
     </div>
-    <div style="background:#E8F5E9;border:1px solid #C8E6C9;padding:16px 18px;border-radius:8px;text-align:center">
-      <div style="font-size:24px;font-weight:800;color:#1B7A3B;font-variant-numeric:tabular-nums">{n_overlap}</div>
+    <div style="background:#241f18;border:1px solid #26332a;padding:16px 18px;border-radius:8px;text-align:center">
+      <div style="font-size:24px;font-weight:500;color:#1B7A3B;font-variant-numeric:tabular-nums">{n_overlap}</div>
       <div style="font-size:10px;color:#1B7A3B;letter-spacing:.8px;text-transform:uppercase;margin-top:2px">Canyon ★ Overlap</div>
     </div>
   </div>
@@ -5550,7 +6431,7 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
 
     <!-- Fund mind-map grid -->
     <div>
-      <div style="font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;
+      <div style="font-size:11px;font-weight:400;letter-spacing:1.2px;text-transform:uppercase;
         color:#888;margin-bottom:12px;padding-bottom:6px;border-bottom:2px solid #1B2A4A">
         All Funds — 13F Holdings (as of {as_of})
       </div>
@@ -5563,11 +6444,11 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
     <div style="position:sticky;top:80px">
 
       <!-- Smart Money Consensus -->
-      <div style="border:1px solid #E2E0DC;border-radius:8px;overflow:hidden;margin-bottom:18px">
-        <div style="background:#1565C0;color:#fff;padding:12px 16px;display:flex;align-items:center;gap:10px">
+      <div style="border:1px solid #241f18;border-radius:8px;overflow:hidden;margin-bottom:18px">
+        <div style="background:#5f7480;color:#fff;padding:12px 16px;display:flex;align-items:center;gap:10px">
           <span style="font-size:16px">🤝</span>
           <div>
-            <div style="font-size:12px;font-weight:700">Smart Money Consensus</div>
+            <div style="font-size:12px;font-weight:400">Smart Money Consensus</div>
             <div style="font-size:10px;opacity:.75">Stocks owned by 2+ top funds</div>
           </div>
         </div>
@@ -5588,16 +6469,16 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
       </div>
 
       <!-- Canyon Overlap -->
-      <div style="border:1px solid #C8E6C9;border-radius:8px;overflow:hidden">
+      <div style="border:1px solid #26332a;border-radius:8px;overflow:hidden">
         <div style="background:#1B7A3B;color:#fff;padding:12px 16px;display:flex;align-items:center;gap:10px">
           <span style="font-size:16px">★</span>
           <div>
-            <div style="font-size:12px;font-weight:700">Canyon × Smart Money Overlap</div>
+            <div style="font-size:12px;font-weight:400">Canyon × Smart Money Overlap</div>
             <div style="font-size:10px;opacity:.75">Where Canyon agrees with top funds</div>
           </div>
         </div>
         <div>{overlap_html}</div>
-        <div style="padding:10px 12px;background:#F9FFF9;border-top:1px solid #E8F5E9">
+        <div style="padding:10px 12px;background:#F9FFF9;border-top:1px solid #241f18">
           <p style="font-size:10px;color:#666;margin:0">Overlap = stock in Canyon top-30 alpha + owned by 2+ famous funds.
           High overlap = institutional confirmation signal.</p>
         </div>
@@ -5609,7 +6490,7 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
   <!-- ════════════════════════════ DEEP MIND-MAP ANALYSIS ════════════════════ -->
   <div style="margin-top:36px">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
-      <div style="font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#888">
+      <div style="font-size:11px;font-weight:400;letter-spacing:1.2px;text-transform:uppercase;color:#888">
         深度思维导图 — Deep Stock Analysis
       </div>
       <div style="flex:1;height:1px;background:linear-gradient(90deg,#1B2A4A,transparent)"></div>
@@ -5622,7 +6503,7 @@ def _build_famous_holdings_tab(fh: dict, ct: dict = None) -> str:
   <!-- ════════════════════ CONGRESSIONAL TRADING ════════════════════════════ -->
   <div style="margin-top:36px">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-      <div style="font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#888">
+      <div style="font-size:11px;font-weight:400;letter-spacing:1.2px;text-transform:uppercase;color:#888">
         Congressional Trading — STOCK Act Disclosures
       </div>
       <div style="flex:1;height:1px;background:linear-gradient(90deg,#1B2A4A,transparent)"></div>
@@ -5642,7 +6523,7 @@ _STOCK_PROFILES = {
         "sector": "Semiconductors",
         "chain_layer": "upstream",
         "chain_label": "AI 上游 — GPU / Accelerator",
-        "chain_color": "#1565C0",
+        "chain_color": "#5f7480",
         "moat_type": "Switching Cost + Network Effect",
         "moat_width": "Wide",
         "moat_score": 9.2,
@@ -5846,7 +6727,7 @@ _STOCK_PROFILES = {
         "sector": "Semiconductor Foundry",
         "chain_layer": "upstream",
         "chain_label": "AI 上游 — Foundry (唯一 3nm/2nm)",
-        "chain_color": "#1565C0",
+        "chain_color": "#5f7480",
         "moat_type": "Cost Advantage + Technical Monopoly",
         "moat_width": "Wide",
         "moat_score": 9.9,
@@ -5913,8 +6794,8 @@ _STOCK_PROFILES = {
         "name": "Visa Inc.",
         "sector": "Payment Processing",
         "chain_layer": "downstream",
-        "chain_label": "金融基础设施 — Global Payments Network",
-        "chain_color": "#195A6E",
+        "chain_label": "金融基础设施 (Financial Infrastructure) — Global Payments Network",
+        "chain_color": "#4c5f65",
         "moat_type": "Network Effect",
         "moat_width": "Wide",
         "moat_score": 9.6,
@@ -5947,8 +6828,8 @@ _STOCK_PROFILES = {
         "name": "American Express Co.",
         "sector": "Payments / Financial Services",
         "chain_layer": "downstream",
-        "chain_label": "金融基础设施 — Premium Closed-Loop Network",
-        "chain_color": "#195A6E",
+        "chain_label": "金融基础设施 (Financial Infrastructure) — Premium Closed-Loop Network",
+        "chain_color": "#4c5f65",
         "moat_type": "Network Effect + Brand",
         "moat_width": "Wide",
         "moat_score": 8.5,
@@ -6001,12 +6882,12 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
     prof = _STOCK_PROFILES.get(ticker)
     if not prof:
         return f"""
-<div style="border:1px solid #E2E0DC;border-radius:8px;padding:16px;background:#fff;margin-bottom:16px">
-  <div style="font-size:18px;font-weight:800;color:#1B2A4A">{ticker}</div>
+<div style="border:1px solid #241f18;border-radius:8px;padding:16px;background:#fff;margin-bottom:16px">
+  <div style="font-size:18px;font-weight:500;color:#1B2A4A">{ticker}</div>
   <p style="font-size:10px;color:#aaa;margin-top:4px">Deep analysis profile not yet available — {n_funds} funds · ${total_value_m:,.0f}M smart money</p>
 </div>"""
 
-    layer_col  = {"upstream": "#1565C0", "midstream": "#1B7A3B", "downstream": "#8B3A3A"}
+    layer_col  = {"upstream": "#5f7480", "midstream": "#1B7A3B", "downstream": "#8B3A3A"}
     layer_icon = {"upstream": "⬆ 上游", "midstream": "↔ 中游", "downstream": "⬇ 下游"}
     col  = layer_col.get(prof.get("chain_layer",""), "#1B2A4A")
     icon = layer_icon.get(prof.get("chain_layer",""), "")
@@ -6022,7 +6903,7 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
     vc = prof.get("value_chain", {})
     vc_html = ""
     for lyr_key, lyr_label, lyr_col in [
-        ("upstream","⬆ 上游 (Input)","#1565C0"),
+        ("upstream","⬆ 上游 (Input)","#5f7480"),
         ("midstream","↔ 中游 (Platform)","#1B7A3B"),
         ("downstream","⬇ 下游 (Application)","#8B3A3A"),
     ]:
@@ -6030,15 +6911,15 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
         items = vc.get(lyr_key, [])
         chips = "".join(
             f'<span style="display:inline-block;padding:1px 7px;margin:1px 0;border-radius:3px;font-size:8px;'
-            f'background:{"#1B2A4A" if (ticker in it or it.startswith(ticker)) else "#F4F4F4"};'
+            f'background:{"#1B2A4A" if (ticker in it or it.startswith(ticker)) else "#241f18"};'
             f'color:{"#fff" if (ticker in it or it.startswith(ticker)) else "#555"};font-weight:{"700" if ticker in it else "400"}">'
             f'{it[:28]}</span>'
             for it in items
         )
         vc_html += f"""
-<div style="border:{'2px' if is_here else '1px'} solid {'#1B2A4A' if is_here else '#E8E8E8'};
+<div style="border:{'2px' if is_here else '1px'} solid {'#1B2A4A' if is_here else '#241f18'};
   border-radius:5px;padding:5px 8px;margin-bottom:5px;background:{'rgba(27,42,74,.04)' if is_here else '#FAFAFA'}">
-  <div style="font-size:8px;font-weight:700;color:{lyr_col};margin-bottom:3px;display:flex;align-items:center;gap:4px">
+  <div style="font-size:8px;font-weight:400;color:{lyr_col};margin-bottom:3px;display:flex;align-items:center;gap:4px">
     {lyr_label}
     {f'<span style="background:{col};color:#fff;font-size:7px;padding:0 4px;border-radius:2px">← HERE</span>' if is_here else ''}
   </div>
@@ -6047,7 +6928,7 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
 
     # ── Competitor matrix ────────────────────────────────────────────────────
     comp_rows = "".join(
-        f'<tr><td style="padding:3px 6px;font-size:9px;font-weight:700;color:#1B2A4A;white-space:nowrap">{c}</td>'
+        f'<tr><td style="padding:3px 6px;font-size:9px;font-weight:400;color:#1B2A4A;white-space:nowrap">{c}</td>'
         f'<td style="padding:3px 6px;font-size:9px;color:#555">{d[:55]}</td></tr>'
         for c, d in (prof.get("competitors") or {}).items()
     )
@@ -6055,7 +6936,7 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
     # ── Moat overall gauge ───────────────────────────────────────────────────
     mscore = prof.get("moat_score", 5)
     mpct   = mscore / 10 * 100
-    mcol   = "#1B7A3B" if mscore >= 8.5 else ("#B8943F" if mscore >= 7 else "#C0392B")
+    mcol   = "#1B7A3B" if mscore >= 8.5 else ("#c8b487" if mscore >= 7 else "#C0392B")
 
     # ── Moat 5-dimension scorecard ───────────────────────────────────────────
     moat_dims = prof.get("moat_dimensions", {})
@@ -6072,7 +6953,7 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
         if v is None:
             continue
         v_pct = v / 10 * 100
-        v_col = "#1B7A3B" if v >= 8 else ("#B8943F" if v >= 6 else "#C0392B")
+        v_col = "#1B7A3B" if v >= 8 else ("#c8b487" if v >= 6 else "#C0392B")
         moat_dim_rows += f"""
 <tr>
   <td style="padding:2px 6px;font-size:9px;color:#444;white-space:nowrap">{DIM_LABELS.get(dim,dim)}</td>
@@ -6081,7 +6962,7 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
       <div style="height:6px;border-radius:2px;background:{v_col};width:{v_pct:.0f}%"></div>
     </div>
   </td>
-  <td style="padding:2px 6px;font-size:9px;font-weight:700;color:{v_col};font-variant-numeric:tabular-nums">{v:.1f}</td>
+  <td style="padding:2px 6px;font-size:9px;font-weight:400;color:{v_col};font-variant-numeric:tabular-nums">{v:.1f}</td>
 </tr>"""
 
     # ── Revenue segments ─────────────────────────────────────────────────────
@@ -6096,27 +6977,27 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
   <div style="flex:1;background:#EEE;border-radius:2px;height:8px">
     <div style="height:8px;border-radius:2px;background:{bar_col};width:{bar_pct:.0f}%;opacity:.75"></div>
   </div>
-  <div style="width:30px;font-size:9px;font-weight:700;color:#444;font-variant-numeric:tabular-nums">{pct:.0f}%</div>
+  <div style="width:30px;font-size:9px;font-weight:400;color:#444;font-variant-numeric:tabular-nums">{pct:.0f}%</div>
 </div>"""
 
     # ── Risk matrix ──────────────────────────────────────────────────────────
     PROB_RANK  = {"High":3,"Med":2,"Low":1,"Critical":4}
     IMP_RANK   = {"Critical":4,"High":3,"Med":2,"Low":1}
-    PROB_COL   = {"High":"#C0392B","Med":"#B8943F","Low":"#1B7A3B","Critical":"#7B0000"}
-    IMP_COL    = {"Critical":"#7B0000","High":"#C0392B","Med":"#B8943F","Low":"#1B7A3B"}
+    PROB_COL   = {"High":"#C0392B","Med":"#c8b487","Low":"#1B7A3B","Critical":"#7B0000"}
+    IMP_COL    = {"Critical":"#7B0000","High":"#C0392B","Med":"#c8b487","Low":"#1B7A3B"}
     risks = sorted(prof.get("risks",[]), key=lambda r: -(PROB_RANK.get(r.get("prob"),0)*IMP_RANK.get(r.get("impact"),0)))
     risk_rows = ""
     for r in risks[:5]:
         p_col = PROB_COL.get(r.get("prob","Med"), "#888")
         i_col = IMP_COL.get(r.get("impact","Med"), "#888")
         risk_rows += f"""
-<tr style="border-bottom:1px solid #F0F0F0">
-  <td style="padding:4px 6px;font-size:9px;font-weight:700;color:#1B2A4A;max-width:100px">{r['name'][:22]}</td>
+<tr style="border-bottom:1px solid #241f18">
+  <td style="padding:4px 6px;font-size:9px;font-weight:400;color:#1B2A4A;max-width:100px">{r['name'][:22]}</td>
   <td style="padding:4px 6px;text-align:center">
-    <span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:{p_col}22;color:{p_col}">{r.get('prob','?')}</span>
+    <span style="font-size:8px;font-weight:400;padding:1px 5px;border-radius:3px;background:{p_col}22;color:{p_col}">{r.get('prob','?')}</span>
   </td>
   <td style="padding:4px 6px;text-align:center">
-    <span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:{i_col}22;color:{i_col}">{r.get('impact','?')}</span>
+    <span style="font-size:8px;font-weight:400;padding:1px 5px;border-radius:3px;background:{i_col}22;color:{i_col}">{r.get('impact','?')}</span>
   </td>
   <td style="padding:4px 6px;font-size:8px;color:#555">{r.get('note','')[:70]}{'…' if len(r.get('note',''))>70 else ''}</td>
 </tr>"""
@@ -6125,19 +7006,19 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
     val_items = ""
     for label, key, suffix in [("Forward P/E","pe_fwd","×"),("P/S","ps","×"),("EV/EBITDA","ev_ebitda","×")]:
         if key in prof:
-            val_items += f'<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #F4F4F4"><span style="font-size:9px;color:#888">{label}</span><span style="font-size:11px;font-weight:700;font-variant-numeric:tabular-nums">{prof[key]}{suffix}</span></div>'
+            val_items += f'<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #241f18"><span style="font-size:9px;color:#888">{label}</span><span style="font-size:11px;font-weight:400;font-variant-numeric:tabular-nums">{prof[key]}{suffix}</span></div>'
 
     if "pe_fwd" in prof:
         peer_pe_rows = ""
         for peer, pe in (prof.get("peer_pe") or {}).items():
             own_pe   = prof["pe_fwd"]
             prem_pct = (own_pe - pe) / pe * 100
-            prem_col = "#C0392B" if prem_pct > 20 else ("#B8943F" if prem_pct > 0 else "#1B7A3B")
+            prem_col = "#C0392B" if prem_pct > 20 else ("#c8b487" if prem_pct > 0 else "#1B7A3B")
             peer_pe_rows += (
                 f'<span style="display:inline-flex;align-items:center;gap:3px;margin:1px;padding:2px 6px;'
-                f'border-radius:4px;background:#F4F4F4;font-size:8px">'
+                f'border-radius:4px;background:#241f18;font-size:8px">'
                 f'<strong>{peer}</strong> <span style="color:#888">{pe}×</span>'
-                f'<span style="color:{prem_col};font-weight:700">({prem_pct:+.0f}%)</span>'
+                f'<span style="color:{prem_col};font-weight:400">({prem_pct:+.0f}%)</span>'
                 f'</span>'
             )
     else:
@@ -6145,10 +7026,10 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
 
     dcf_html = ""
     if "dcf_low" in prof and "dcf_high" in prof:
-        dcf_html = f'<div style="margin-top:6px;padding:6px 8px;background:#F0F8FF;border-radius:4px;display:flex;justify-content:space-between;align-items:center"><span style="font-size:9px;color:#888">DCF Fair Value Range</span><span style="font-size:11px;font-weight:700;color:#1565C0">${prof["dcf_low"]} – ${prof["dcf_high"]}</span></div>'
+        dcf_html = f'<div style="margin-top:6px;padding:6px 8px;background:#F0F8FF;border-radius:4px;display:flex;justify-content:space-between;align-items:center"><span style="font-size:9px;color:#888">DCF Fair Value Range</span><span style="font-size:11px;font-weight:400;color:#5f7480">${prof["dcf_low"]} – ${prof["dcf_high"]}</span></div>'
 
     return f"""
-<div class="mindmap-card" style="border:1px solid #E2E0DC;border-radius:12px;overflow:hidden;
+<div class="mindmap-card" style="border:1px solid #241f18;border-radius:12px;overflow:hidden;
   background:#fff;box-shadow:0 3px 12px rgba(0,0,0,.08);margin-bottom:24px">
 
   <!-- ═══ HEADER ═══════════════════════════════════════════════════════════ -->
@@ -6156,7 +7037,7 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
       <div>
         <div style="display:flex;align-items:baseline;gap:10px">
-          <span style="font-size:26px;font-weight:900;letter-spacing:-1px">{ticker}</span>
+          <span style="font-size:26px;font-weight:500;letter-spacing:-1px">{ticker}</span>
           <span style="font-size:12px;opacity:.8">{prof.get('name','')}</span>
         </div>
         <div style="font-size:10px;opacity:.65;margin-top:2px">{prof.get('sector','')}</div>
@@ -6167,20 +7048,20 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
         <span style="font-size:9px;padding:3px 8px;border-radius:20px;background:rgba(255,255,255,.2)">{icon}</span>
         <div style="margin-top:6px">
           <span style="font-size:9px;padding:2px 8px;border-radius:20px;background:rgba(255,255,255,.15)">{n_funds} top funds · ${total_value_m:,.0f}M AUM</span>
-          {' <span style="font-size:9px;padding:2px 8px;border-radius:20px;background:rgba(255,255,255,.3);font-weight:700;margin-left:4px">★ Canyon</span>' if canyon_owns else ''}
+          {' <span style="font-size:9px;padding:2px 8px;border-radius:20px;background:rgba(255,255,255,.3);font-weight:400;margin-left:4px">★ Canyon</span>' if canyon_owns else ''}
         </div>
       </div>
     </div>
   </div>
 
   <!-- ═══ ROW 1: Value Chain | Moat Scorecard | Valuation ════════════════ -->
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;border-bottom:1px solid #F0F0F0">
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;border-bottom:1px solid #241f18">
 
     <!-- Col A: Value Chain + Competitors -->
-    <div style="padding:14px 16px;border-right:1px solid #F0F0F0">
-      <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:8px">产业链定位 Value Chain Position</div>
+    <div style="padding:14px 16px;border-right:1px solid #241f18">
+      <div style="font-size:9px;font-weight:400;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:8px">产业链定位 Value Chain Position</div>
       {vc_html}
-      <div style="margin-top:12px;font-size:9px;font-weight:700;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:6px">竞争格局 Competitive Landscape</div>
+      <div style="margin-top:12px;font-size:9px;font-weight:400;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:6px">竞争格局 Competitive Landscape</div>
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse">
           <tbody>{comp_rows}</tbody>
@@ -6189,13 +7070,13 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
     </div>
 
     <!-- Col B: Moat 5-Dimension Scorecard + Patents -->
-    <div style="padding:14px 16px;border-right:1px solid #F0F0F0">
-      <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:6px">护城河 Moat Analysis</div>
+    <div style="padding:14px 16px;border-right:1px solid #241f18">
+      <div style="font-size:9px;font-weight:400;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:6px">护城河 Moat Analysis</div>
 
       <!-- Overall score -->
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:6px 8px;background:#FAFAFA;border-radius:6px">
         <div>
-          <div style="font-size:13px;font-weight:800;color:{mcol}">{prof.get('moat_width','')}</div>
+          <div style="font-size:13px;font-weight:500;color:{mcol}">{prof.get('moat_width','')}</div>
           <div style="font-size:8px;color:#888">{prof.get('moat_type','')[:30]}</div>
         </div>
         <div style="flex:1">
@@ -6203,44 +7084,44 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
             <div style="height:8px;border-radius:10px;background:{mcol};width:{mpct:.0f}%"></div>
           </div>
         </div>
-        <div style="font-size:14px;font-weight:800;color:{mcol};font-variant-numeric:tabular-nums">{mscore:.1f}</div>
+        <div style="font-size:14px;font-weight:500;color:{mcol};font-variant-numeric:tabular-nums">{mscore:.1f}</div>
       </div>
 
       <!-- 5-dimension table -->
-      <div style="font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#999;margin-bottom:4px">5-Dimension Breakdown</div>
+      <div style="font-size:8px;font-weight:400;text-transform:uppercase;letter-spacing:.6px;color:#999;margin-bottom:4px">5-Dimension Breakdown</div>
       <table style="width:100%;border-collapse:collapse;margin-bottom:8px">
         <tbody>{moat_dim_rows}</tbody>
       </table>
 
       <!-- Moat drivers -->
-      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px">Key Moat Drivers</div>
+      <div style="font-size:9px;font-weight:400;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px">Key Moat Drivers</div>
       {''.join(f'<div style="display:flex;align-items:flex-start;gap:4px;font-size:9px;color:#333;margin-bottom:3px;line-height:1.4"><span style="color:{col};font-size:8px;margin-top:2px;flex-shrink:0">▶</span>{d}</div>' for d in prof.get("moat_drivers",[])[:4])}
 
       <!-- Patents -->
-      <div style="margin-top:10px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px">专利 Patents — {prof.get('patent_count','?')}</div>
+      <div style="margin-top:10px;font-size:9px;font-weight:400;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px">专利 Patents — {prof.get('patent_count','?')}</div>
       {''.join(f'<div style="font-size:9px;color:#444;margin-bottom:2px">• {pa}</div>' for pa in prof.get('patent_areas',[])[:5])}
     </div>
 
     <!-- Col C: Valuation + Bull/Bear/Canyon -->
     <div style="padding:14px 16px">
-      <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:6px">估值 Valuation Snapshot</div>
+      <div style="font-size:9px;font-weight:400;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:6px">估值 Valuation Snapshot</div>
       {val_items}
       {dcf_html}
 
       <!-- Peer P/E comparison -->
-      {f'<div style="margin-top:8px"><div style="font-size:8px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:4px">vs Peers (fwd P/E)</div><div style="line-height:2">{peer_pe_rows}</div></div>' if peer_pe_rows else ''}
+      {f'<div style="margin-top:8px"><div style="font-size:8px;font-weight:400;color:#888;text-transform:uppercase;margin-bottom:4px">vs Peers (fwd P/E)</div><div style="line-height:2">{peer_pe_rows}</div></div>' if peer_pe_rows else ''}
 
       <!-- Bull case -->
-      <div style="margin-top:10px;font-size:9px;font-weight:700;letter-spacing:.8px;color:#1B7A3B;text-transform:uppercase;margin-bottom:4px">多头逻辑 Bull Case</div>
+      <div style="margin-top:10px;font-size:9px;font-weight:400;letter-spacing:.8px;color:#1B7A3B;text-transform:uppercase;margin-bottom:4px">Longs逻辑 Bull Case</div>
       <div style="font-size:9px;color:#333;line-height:1.55;padding:6px 8px;background:#F2FFF2;border-radius:4px;border-left:3px solid #1B7A3B;margin-bottom:6px">{prof.get('bull_case','')}</div>
 
       <!-- Bear case -->
-      <div style="font-size:9px;font-weight:700;letter-spacing:.8px;color:#C0392B;text-transform:uppercase;margin-bottom:4px">空头逻辑 Bear Case</div>
+      <div style="font-size:9px;font-weight:400;letter-spacing:.8px;color:#C0392B;text-transform:uppercase;margin-bottom:4px">Shorts逻辑 Bear Case</div>
       <div style="font-size:9px;color:#333;line-height:1.55;padding:6px 8px;background:#FFF2F2;border-radius:4px;border-left:3px solid #C0392B;margin-bottom:6px">{prof.get('bear_case','')}</div>
 
       <!-- Canyon view -->
-      <div style="padding:6px 8px;background:#F5F5F5;border-radius:4px;border-left:3px solid #B8943F">
-        <div style="font-size:8px;font-weight:700;text-transform:uppercase;color:#B8943F;margin-bottom:2px">Canyon 研判</div>
+      <div style="padding:6px 8px;background:#F5F5F5;border-radius:4px;border-left:3px solid #c8b487">
+        <div style="font-size:8px;font-weight:400;text-transform:uppercase;color:#c8b487;margin-bottom:2px">Canyon 研判</div>
         <div style="font-size:9px;color:#333;line-height:1.5">{prof.get('canyon_view','')}</div>
       </div>
     </div>
@@ -6251,18 +7132,18 @@ def _build_stock_mindmap_card(ticker: str, n_funds: int, funds: list, total_valu
   <div style="display:grid;grid-template-columns:1fr 1fr;background:#FAFAFA">
 
     <!-- Revenue segments -->
-    <div style="padding:12px 16px;border-right:1px solid #F0F0F0">
-      <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:8px">收入结构 Revenue Breakdown</div>
+    <div style="padding:12px 16px;border-right:1px solid #241f18">
+      <div style="font-size:9px;font-weight:400;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:8px">收入结构 Revenue Breakdown</div>
       {rev_bars if rev_bars else '<p style="font-size:9px;color:#aaa">Revenue breakdown not available</p>'}
     </div>
 
     <!-- Risk matrix -->
     <div style="padding:12px 16px">
-      <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:8px">风险矩阵 Risk Matrix — Probability × Impact</div>
+      <div style="font-size:9px;font-weight:400;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:8px">风险矩阵 Risk Matrix — Probability × Impact</div>
       {f"""<div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;min-width:300px">
           <thead>
-            <tr style="background:#F0F0F0">
+            <tr style="background:#241f18">
               <th style="padding:3px 6px;font-size:8px;color:#888;text-align:left">Risk</th>
               <th style="padding:3px 6px;font-size:8px;color:#888;text-align:center">Prob</th>
               <th style="padding:3px 6px;font-size:8px;color:#888;text-align:center">Impact</th>
@@ -6343,7 +7224,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
     today       = datetime.now().strftime("%Y-%m-%d")   # always today's date for display
     report_date = daily.get("date", today)              # when signals were last generated
     data_stale  = report_date != today
-    stale_note  = f' <span style="color:#B8943F;font-size:11px;font-weight:400">(last updated {report_date} — click ⟳ Refresh Now to update)</span>' if data_stale else ""
+    stale_note  = f' <span style="color:#c8b487;font-size:11px;font-weight:400">(last updated {report_date} — click ⟳ Refresh Now to update)</span>' if data_stale else ""
 
     # ── Data freshness check (file-level, not just report_date) ───────────────
     import time as _time
@@ -6387,16 +7268,17 @@ def build_html(daily: dict, chart: dict, summ: dict,
     _hmm_stale      = hmm_data.get("stale", False)
     _hmm_prob_label = f"{_hmm_prob_bear*100:.0f}% bear prob" if _hmm_prob_bear is not None else ""
     if _hmm_stale:
-        _hmm_meta = f'<span style="display:block;font-size:10px;color:#B8943F;margin-top:3px">⚠ HMM last run {_hmm_date} ({_hmm_days_stale}d ago)</span>'
+        _hmm_meta = f'<span style="display:block;font-size:10px;color:#c8b487;margin-top:3px">⚠ HMM last run {_hmm_date} ({_hmm_days_stale}d ago)</span>'
     elif _hmm_date != "—":
         _hmm_meta = f'<span style="display:block;font-size:10px;color:#888;margin-top:3px">HMM as of {_hmm_date}</span>'
     else:
         _hmm_meta = ""
-    mac_color = "#1B6F4A" if "ON" in macro.upper() else ("#B83232" if "OFF" in macro.upper() else "#B8943F")
+    mac_color = "#1B6F4A" if "ON" in macro.upper() else ("#B83232" if "OFF" in macro.upper() else "#c8b487")
 
     # ── Macro Regime Outlook variables ────────────────────────────────────────
     _mo_composite     = macro_outlook.get("composite", {})
     _mo_bear_prob     = _mo_composite.get("bear_prob")       # float 0-100 or None
+    _mo_delta         = _mo_composite.get("bear_prob_delta") # float or None (vs ~1wk ago)
     _mo_label         = _mo_composite.get("label", "—")
     _mo_color         = _mo_composite.get("color", "#888")
     _mo_as_of         = macro_outlook.get("as_of", "—")
@@ -6405,21 +7287,25 @@ def build_html(daily: dict, chart: dict, summ: dict,
     def _mo_signal_bar(key: str) -> str:
         sig = _mo_signals.get(key, {})
         if not sig.get("ok"):
-            return f'<div style="color:#BBB;font-size:11px;padding:8px 0;border-bottom:1px solid #F0EDE8">{sig.get("name", key)} — no data</div>'
+            return f'<div style="color:{FT["faint"]};font-size:11px;padding:8px 0;border-bottom:1px solid {FT["border2"]}">{sig.get("name", key)} — no data</div>'
         bs    = float(sig.get("bear_score", 0))
         mx    = float(sig.get("max_score", 2))
         pct   = bs / mx * 100
-        color = "#1B6F4A" if pct < 25 else ("#B8943F" if pct < 60 else "#B83232")
+        color = FT["pos"] if pct < 25 else (FT["warn"] if pct < 60 else FT["neg"])
+        watch = sig.get("watch_for", "")
+        watch_html = (f'<div style="font-size:9.5px;color:{FT["faint"]};margin-top:3px;line-height:1.4">'
+                      f'Watch for · {watch}</div>') if watch else ""
         return (
-            f'<div style="padding:8px 0;border-bottom:1px solid #F0EDE8">'
+            f'<div style="padding:9px 0;border-bottom:1px solid {FT["border2"]}">'
             f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
-            f'<span style="font-size:11px;color:#444;font-weight:600;letter-spacing:.02em">{sig["name"]}</span>'
-            f'<span style="font-size:11px;color:{color};font-weight:700;font-variant-numeric:tabular-nums">{sig.get("display","—")}</span>'
+            f'<span style="font-size:11.5px;color:{FT["ink"]};font-weight:400;letter-spacing:.02em">{sig["name"]}</span>'
+            f'<span style="font-size:11px;color:{color};font-weight:400;font-variant-numeric:tabular-nums">{sig.get("display","—")}</span>'
             f'</div>'
             f'<div style="display:flex;align-items:center;gap:8px">'
-            f'<div style="flex:1;height:3px;border-radius:2px;background:#F0EDE8"><div style="height:3px;border-radius:2px;background:{color};width:{pct:.0f}%"></div></div>'
-            f'<span style="font-size:10px;color:#AAA;white-space:nowrap;flex-shrink:0">{sig.get("trend_label","")}</span>'
+            f'<div style="flex:1;height:3px;border-radius:2px;background:{FT["inner"]}"><div style="height:3px;border-radius:2px;background:{color};width:{pct:.0f}%"></div></div>'
+            f'<span style="font-size:10px;color:{FT["mute"]};white-space:nowrap;flex-shrink:0">{sig.get("trend_label","")}</span>'
             f'</div>'
+            f'{watch_html}'
             f'</div>'
         )
 
@@ -6430,8 +7316,8 @@ def build_html(daily: dict, chart: dict, summ: dict,
         macro_is_low = _mo_bear_prob < 30
         if hmm_is_bear and macro_is_low:
             conflict_note = (
-                f'<div style="background:#FDF8EE;border-left:3px solid #B8943F;padding:10px 14px;margin-bottom:16px">'
-                f'<p style="margin:0 0 3px;font-size:10px;font-weight:700;color:#B8943F;text-transform:uppercase;letter-spacing:1.5px">Signal Conflict — Price dip, not macro breakdown</p>'
+                f'<div style="background:#FDF8EE;border-left:3px solid #c8b487;padding:10px 14px;margin-bottom:16px">'
+                f'<p style="margin:0 0 3px;font-size:10px;font-weight:400;color:#c8b487;text-transform:uppercase;letter-spacing:1.5px">Signal Conflict — Price dip, not macro breakdown</p>'
                 f'<p style="margin:0;font-size:11px;color:#666;line-height:1.6">HMM detected a short-term price drawdown (reactive, 1-3 week lag). '
                 f'5 macro leading indicators show only {_mo_bear_prob:.0f}% bear risk — credit spreads tight, yield curve positive, '
                 f'VIX in normal contango. This looks like a correction, not a regime shift.</p>'
@@ -6440,7 +7326,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
         elif not hmm_is_bear and _mo_bear_prob > 55:
             conflict_note = (
                 f'<div style="background:#FEF2F2;border-left:3px solid #B83232;padding:10px 14px;margin-bottom:16px">'
-                f'<p style="margin:0 0 3px;font-size:10px;font-weight:700;color:#B83232;text-transform:uppercase;letter-spacing:1.5px">Warning — Macro deteriorating ahead of price</p>'
+                f'<p style="margin:0 0 3px;font-size:10px;font-weight:400;color:#B83232;text-transform:uppercase;letter-spacing:1.5px">Warning — Macro deteriorating ahead of price</p>'
                 f'<p style="margin:0;font-size:11px;color:#666;line-height:1.6">HMM shows BULL but macro leading indicators show {_mo_bear_prob:.0f}% bear risk. '
                 f'This has historically preceded regime shifts by 4-8 weeks.</p>'
                 f'</div>'
@@ -6448,27 +7334,36 @@ def build_html(daily: dict, chart: dict, summ: dict,
         else:
             conflict_note = ""
         bars = "".join(_mo_signal_bar(k) for k in ["yield_curve","credit_spreads","vix_term_structure","spy_trend","labor_market"])
-        prob_bar_color = "#1B6F4A" if _mo_bear_prob < 30 else ("#B8943F" if _mo_bear_prob < 60 else "#B83232")
+        prob_bar_color = FT["pos"] if _mo_bear_prob < 30 else (FT["warn"] if _mo_bear_prob < 60 else FT["neg"])
         what_it_means = (
-            "Macro conditions are healthy. Low probability of a sustained bear market in the next 4 weeks." if _mo_bear_prob < 30 else
-            "Macro conditions showing stress. Monitor for further deterioration." if _mo_bear_prob < 60 else
-            "Multiple indicators flashing warning. High bear risk for the next 4 weeks."
+            "Macro conditions are healthy — low probability of a sustained bear market in the next 4 weeks. Lower is better." if _mo_bear_prob < 30 else
+            "Macro is showing stress — watch for further deterioration." if _mo_bear_prob < 60 else
+            "Multiple indicators flashing — high bear risk over the next 4 weeks."
         )
+        # 周环比箭头 — 让慢变量也能看出方向 (熊险上升=变差=红, 下降=变好=绿)
+        if _mo_delta is None:
+            arrow_html = f'<span style="font-size:12px;color:{FT["faint"]};margin-left:10px">week-over-week building</span>'
+        elif _mo_delta > 0.4:
+            arrow_html = f'<span style="font-size:13px;color:{FT["neg"]};margin-left:10px">▲ +{_mo_delta:.0f} vs last week (risk rising)</span>'
+        elif _mo_delta < -0.4:
+            arrow_html = f'<span style="font-size:13px;color:{FT["pos"]};margin-left:10px">▼ {_mo_delta:.0f} vs last week (risk falling)</span>'
+        else:
+            arrow_html = f'<span style="font-size:13px;color:{FT["mute"]};margin-left:10px">= flat vs last week</span>'
         return (
             f'{conflict_note}'
-            f'<div style="display:grid;grid-template-columns:160px 1fr;gap:24px;align-items:start">'
+            f'<div style="display:grid;grid-template-columns:190px 1fr;gap:24px;align-items:start">'
             f'<div>'
-            f'<p style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:600;margin:0 0 6px">4-Week Bear Risk</p>'
-            f'<p style="font-family:\'Playfair Display\',serif;font-size:36px;font-weight:700;color:{prob_bar_color};line-height:1;margin:0">{_mo_bear_prob:.0f}%</p>'
-            f'<p style="font-size:12px;font-weight:700;color:{_mo_color};margin:4px 0 10px">{_mo_label}</p>'
-            f'<div style="height:4px;border-radius:2px;background:#F0EDE8;margin-bottom:10px">'
-            f'<div style="height:4px;border-radius:2px;background:{prob_bar_color};width:{_mo_bear_prob:.0f}%"></div>'
+            f'<p style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:{FT["mute"]};font-weight:400;margin:0 0 6px">4-Week Bear Risk</p>'
+            f'<p style="font-family:{FT["serif"]};font-size:38px;font-weight:400;color:{prob_bar_color};line-height:1;margin:0">{_mo_bear_prob:.0f}%</p>'
+            f'<p style="font-size:12px;font-weight:400;color:{_mo_color};margin:5px 0 2px">{_mo_label}{arrow_html}</p>'
+            f'<div style="height:5px;border-radius:2px;background:{FT["inner"]};margin:10px 0">'
+            f'<div style="height:5px;border-radius:2px;background:{prob_bar_color};width:{_mo_bear_prob:.0f}%"></div>'
             f'</div>'
-            f'<p style="font-size:11px;color:#777;line-height:1.6;margin:0">{what_it_means}</p>'
-            f'<p style="font-size:10px;color:#CCC;margin:8px 0 0">as of {_mo_as_of[:10] if _mo_as_of != "—" else "—"}</p>'
+            f'<p style="font-size:11px;color:{FT["sub"]};line-height:1.6;margin:0">{what_it_means}</p>'
+            f'<p style="font-size:10px;color:{FT["faint"]};margin:8px 0 0">as of {_mo_as_of[:10] if _mo_as_of != "—" else "—"} · 0% = very calm, 100% = high risk</p>'
             f'</div>'
-            f'<div style="border-left:1px solid #E2E0DC;padding-left:24px">'
-            f'<p style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:600;margin:0 0 4px">5 Leading Indicators</p>'
+            f'<div style="border-left:1px solid {FT["border"]};padding-left:24px">'
+            f'<p style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:{FT["mute"]};font-weight:400;margin:0 0 4px">5 Leading Indicators · distance to warning line</p>'
             f'{bars}'
             f'</div>'
             f'</div>'
@@ -6484,12 +7379,12 @@ def build_html(daily: dict, chart: dict, summ: dict,
             p    = r["spy"]
             beat = r["beat"]
             bg   = "rgba(107,204,160,0.15)" if beat else "rgba(239,144,144,0.10)"
-            tag  = f'<span style="color:#6BCCA0;font-weight:700">{s*100:+.1f}%★</span>' if beat else f'<span style="color:#EF9090">{s*100:+.1f}%</span>'
+            tag  = f'<span style="color:#6BCCA0;font-weight:400">{s*100:+.1f}%★</span>' if beat else f'<span style="color:#EF9090">{s*100:+.1f}%</span>'
             q_c  = "#1B6F4A" if q > 0 else "#B83232"
             rows.append(
                 f'<tr style="background:{bg}">'
                 f'<td style="color:rgba(255,255,255,.7)">{yr}</td>'
-                f'<td style="text-align:right;color:#6BCCA0;font-weight:700">{s*100:+.1f}%</td>'
+                f'<td style="text-align:right;color:#6BCCA0;font-weight:400">{s*100:+.1f}%</td>'
                 f'<td style="text-align:right;color:{q_c}">{q*100:+.1f}%</td>'
                 f'<td style="text-align:right">{tag}</td>'
                 f'<td style="text-align:right;color:rgba(255,255,255,.45)">{p*100:+.1f}%</td>'
@@ -6534,8 +7429,8 @@ def build_html(daily: dict, chart: dict, summ: dict,
     _reg_hmm_bear  = v251_regime.get("hmm_is_bear", False)
     _reg_tqqq_s    = f'{_reg_tqqq:.0%} ON' if _reg_tqqq > 0 else '0% OFF'
     _reg_hmm_note  = (
-        f'<div style="margin-top:8px;padding:6px 10px;background:#FDF8EE;border-left:3px solid #B8943F;border-radius:0 3px 3px 0">'
-        f'<span style="font-size:10px;color:#B8943F;font-weight:700">HMM=BEAR override</span>'
+        f'<div style="margin-top:8px;padding:6px 10px;background:#FDF8EE;border-left:3px solid #c8b487;border-radius:0 3px 3px 0">'
+        f'<span style="font-size:10px;color:#c8b487;font-weight:400">HMM=BEAR override</span>'
         f'<span style="font-size:10px;color:#888;display:block">TQQQ cut from {_reg_tqqq_base:.0%} → {_reg_tqqq:.0%} (halved while HMM is bearish)</span>'
         f'</div>'
     ) if _reg_hmm_bear and _reg_tqqq < _reg_tqqq_base else ""
@@ -6621,7 +7516,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
             # Count signals that are clearly positive (above 65 on 0-100 scale)
             n = sum(1 for v in [ml, sqz, rev, ins] if v > 65)
             stars = "★" * n + "☆" * (4 - n)
-            stars_color = "#1B6F4A" if n >= 3 else ("#B8943F" if n == 2 else "#999")
+            stars_color = "#1B6F4A" if n >= 3 else ("#c8b487" if n == 2 else "#999")
             verdict = "Strong" if n >= 3 else ("Watch" if n == 2 else "Weak")
             verdict_class = "pos" if n >= 3 else ("" if n == 2 else "neg")
             ml_disp = f"{(ml-50)/25:+.2f}σ"
@@ -6663,17 +7558,12 @@ def build_html(daily: dict, chart: dict, summ: dict,
             ("Removed from avoids", exit_short, "#1B6F4A"),
         ]:
             if tickers:
-                chips = "".join(f'<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;background:#F2F1EE;border:1px solid #E2E0DC;font-size:12px;font-weight:700;color:{color}">{t}</span>' for t in tickers)
-                items.append(f'<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #F2F1EE"><span style="font-size:11px;color:#999;min-width:96px;font-weight:600">{label}</span><div>{chips}</div></div>')
-        return f"""
-    <div class="mt36">
-      <p class="eyebrow">What changed since yesterday</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">New buy &amp; avoid signals — review before acting</h3>
-      <div class="rule"></div>
-      <div style="background:#fff;border:1px solid #E2E0DC;padding:8px 16px">
-        {"".join(items)}
-      </div>
-    </div>"""
+                chips = "".join(f'<span style="display:inline-block;margin:2px 4px 2px 0;padding:3px 9px;background:{FT["inner"]};border:1px solid {FT["border2"]};border-radius:4px;font-size:12px;font-weight:400;color:{color}">{t}</span>' for t in tickers)
+                items.append(f'<div style="display:flex;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid {FT["border2"]}"><span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:{FT["mute"]};min-width:120px;font-weight:400">{label}</span><div>{chips}</div></div>')
+        return (_ft_open("What Changed Since Yesterday · New Buys / Removed / New Avoids",
+                         "A fresh 'New buy ▲' into the top 15 is the most actionable signal")
+                + "".join(items)
+                + _ft_close("A stock that just entered the top 15 for the first time (New buy ▲) is the most actionable signal here — something changed overnight to push it up. A New avoid ▼ is worth a look if you hold it."))
 
     def _daily_summary():
         if hmm == "BULL":
@@ -6826,11 +7716,12 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     def desk_monitor_rows():
         if not desk_monitor:
-            return "<p style='color:#AAA;font-size:13px'>No alerts today.</p>"
+            return "<p style='color:#8f866f;font-size:13px'>No alerts today.</p>"
+        # FT palette, hardcoded — no dependence on the global override net.
         sev_color = {
-            "CRITICAL": "#B83232", "HIGH": "#B8943F",
-            "WARNING":  "#B8943F", "MEDIUM": "#666",
-            "INFO":     "#2563EB", "LOW":    "#BBB",
+            "CRITICAL": "#c68b83", "HIGH": "#c8b487",
+            "WARNING":  "#c8b487", "MEDIUM": "#8f866f",
+            "INFO":     "#8aa6a6", "LOW":    "#79715f",
         }
         _MON_LABEL = {
             "RISK_LIMIT_BREACH": "Risk",
@@ -6842,9 +7733,9 @@ def build_html(daily: dict, chart: dict, summ: dict,
             "NEW_BUY_LIST":      "Picks",
         }
         rows = []
-        for r in desk_monitor:
+        for i, r in enumerate(desk_monitor):
             sev       = str(r.get("severity", "")).upper()
-            sc        = sev_color.get(sev, "#999")
+            sc        = sev_color.get(sev, "#8f866f")
             mon_label = _MON_LABEL.get(str(r.get("monitor", "")).upper(), str(r.get("monitor", "")))
             sev_label = sev.title() if sev else ""
 
@@ -6856,23 +7747,28 @@ def build_html(daily: dict, chart: dict, summ: dict,
             if title_body.upper().startswith(prefix.upper()):
                 title_body = title_body[len(prefix):]
 
-            rows.append(f"""<div style="display:flex;align-items:flex-start;gap:14px;padding:12px 16px;background:#fff;border:1px solid #E2E0DC;border-left:4px solid {sc};margin-bottom:6px">
-              <div style="flex-shrink:0;min-width:66px">
-                <p style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:{sc};font-weight:700;margin-bottom:1px">{_esc(sev_label)}</p>
-                <p style="font-size:11px;color:#AAA;letter-spacing:.3px">{_esc(mon_label)}</p>
+            # Clean FT feed row: NO box outline. Colored left accent + hairline
+            # divider between rows only. Dense but uncluttered — no "白边".
+            divider = "" if i == 0 else "border-top:1px solid #211c15;"
+            rows.append(f"""<div style="display:flex;align-items:flex-start;gap:16px;padding:13px 4px 13px 16px;border-left:3px solid {sc};{divider}">
+              <div style="flex-shrink:0;min-width:74px">
+                <p style="font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:{sc};font-weight:400;margin-bottom:2px">{_esc(sev_label)}</p>
+                <p style="font-size:10.5px;color:#79715f;letter-spacing:.06em;text-transform:uppercase">{_esc(mon_label)}</p>
               </div>
-              <div style="flex:1">
-                <p style="font-size:13.5px;font-weight:700;color:#1A1A1A;margin-bottom:3px"><span style="color:#1B2A4A">{_esc(tk_disp)}</span> &mdash; {_esc(title_body)}</p>
-                <p style="font-size:12.5px;color:#444;line-height:1.5">{_esc(detail_h)}</p>
-                <p style="font-size:11.5px;color:#B8943F;font-weight:600;margin-top:5px">&rarr; {_esc(action_h)}</p>
+              <div style="flex:1;min-width:0">
+                <p style="font-size:13.5px;font-weight:400;color:#f0e9da;margin-bottom:3px;line-height:1.45"><span style="color:#c8b487">{_esc(tk_disp)}</span> &mdash; {_esc(title_body)}</p>
+                <p style="font-size:12.5px;color:#b0a68f;line-height:1.55">{_esc(detail_h)}</p>
+                <p style="font-size:11.5px;color:#9a8a5f;font-weight:400;margin-top:5px;letter-spacing:.01em">&rarr; {_esc(action_h)}</p>
               </div>
             </div>""")
-        return "\n".join(rows)
+        # Wrap in a single subtle card so the feed reads as one panel, not scattered boxes.
+        return ('<div style="background:#14110b;border:1px solid #221d15;border-radius:8px;'
+                'padding:2px 14px 4px">' + "\n".join(rows) + '</div>')
 
     def workflow_steps_rows():
         if not wf_steps:
             return "<tr><td colspan='4' style='color:#AAA'>No workflow data</td></tr>"
-        status_color = {"OK": "#1B6F4A", "REVIEW": "#B8943F", "WATCH": "#2563EB", "DONE": "#1B6F4A"}
+        status_color = {"OK": "#1B6F4A", "REVIEW": "#c8b487", "WATCH": "#5f7480", "DONE": "#1B6F4A"}
         status_label = {"OK": "Done", "REVIEW": "Review now", "WATCH": "Monitor", "DONE": "Complete"}
         rows = []
         for r in wf_steps:
@@ -6881,8 +7777,8 @@ def build_html(daily: dict, chart: dict, summ: dict,
             st_disp = status_label.get(st, st.title())
             rows.append(f"""<tr>
               <td class="td-rank">#{_esc(r.get('step_order',''))}</td>
-              <td style="font-weight:700;color:#1B2A4A">{_esc(r.get('station',''))}</td>
-              <td><span style="font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:{sc}">{st_disp}</span></td>
+              <td style="font-weight:400;color:#1B2A4A">{_esc(r.get('station',''))}</td>
+              <td><span style="font-size:10px;font-weight:400;letter-spacing:.8px;text-transform:uppercase;color:{sc}">{st_disp}</span></td>
               <td style="font-size:12.5px;color:#333">{_esc(str(r.get('what_to_do',''))[:120])}</td>
             </tr>""")
         return "\n".join(rows)
@@ -6890,7 +7786,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
     def workflow_queue_rows():
         if not wf_queue:
             return "<tr><td colspan='6' style='color:#AAA'>No queue data</td></tr>"
-        pri_color = {"High": "#B83232", "Medium": "#B8943F", "Low": "#1B6F4A"}
+        pri_color = {"High": "#B83232", "Medium": "#c8b487", "Low": "#1B6F4A"}
         rows = []
         for r in wf_queue:
             pc = pri_color.get(str(r.get("priority","")), "#999")
@@ -6899,9 +7795,9 @@ def build_html(daily: dict, chart: dict, summ: dict,
               <td class="td-rank">#{_esc(r.get('priority_rank',''))}</td>
               <td class="td-ticker">{_esc(r.get('ticker',''))}</td>
               <td style="font-size:12px;color:#555">{_esc(r.get('sector',''))}</td>
-              <td><span style="font-size:10px;font-weight:700;color:{pc};letter-spacing:.5px;text-transform:uppercase">{_esc(r.get('priority',''))}</span></td>
+              <td><span style="font-size:10px;font-weight:400;color:{pc};letter-spacing:.5px;text-transform:uppercase">{_esc(r.get('priority',''))}</span></td>
               <td style="font-size:12px;color:#333">{_esc(r.get('sector_cycle_state',''))}</td>
-              <td style="font-size:12px;color:#1B2A4A;font-weight:600">{_esc(action)}</td>
+              <td style="font-size:12px;color:#1B2A4A;font-weight:400">{_esc(action)}</td>
             </tr>""")
         return "\n".join(rows)
 
@@ -6923,7 +7819,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
         book_order = ["SHORT", "MEDIUM", "LONG"]
         book_label = {"SHORT": "Short-term", "MEDIUM": "Mid-term", "LONG": "Long-term"}
-        book_hdr_col = {"SHORT": "#B83232", "MEDIUM": "#B8943F", "LONG": "#1B2A4A"}
+        book_hdr_col = {"SHORT": "#B83232", "MEDIUM": "#c8b487", "LONG": "#1B2A4A"}
         book_cols = []
         for bk in book_order:
             s = book_stats.get(bk, {})
@@ -6932,11 +7828,11 @@ def build_html(daily: dict, chart: dict, summ: dict,
             upnl = s["upnl"]
             bk_col = book_hdr_col.get(bk, "#999")
             upnl_col = "#1B6F4A" if upnl > 0 else "#B83232"
-            book_cols.append(f"""<div style="flex:1;min-width:150px;padding:14px 16px;background:#fff;border:1px solid #E2E0DC;border-top:3px solid {bk_col};border-radius:6px">
-                <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:{bk_col};margin-bottom:6px">{_esc(book_label.get(bk,bk))} · {bk}</div>
-                <div style="font-size:22px;font-weight:800;color:#1A1A1A">{s['n']} <span style="font-size:13px;font-weight:400;color:#999">positions</span></div>
+            book_cols.append(f"""<div style="flex:1;min-width:150px;padding:14px 16px;background:#fff;border:1px solid #241f18;border-top:3px solid {bk_col};border-radius:6px">
+                <div style="font-size:10px;font-weight:400;text-transform:uppercase;letter-spacing:.8px;color:{bk_col};margin-bottom:6px">{_esc(book_label.get(bk,bk))} · {bk}</div>
+                <div style="font-size:22px;font-weight:500;color:#1A1A1A">{s['n']} <span style="font-size:13px;font-weight:400;color:#999">positions</span></div>
                 <div style="font-size:12px;color:#555;margin-top:4px">{s['longs']}L / {s['shorts']}S &nbsp;|&nbsp; MV: ${s['mv']:,.0f}</div>
-                <div style="font-size:14px;font-weight:700;color:{upnl_col};margin-top:6px">Unrealized P&amp;L: ${upnl:+,.0f}</div>
+                <div style="font-size:14px;font-weight:400;color:{upnl_col};margin-top:6px">Unrealized P&amp;L: ${upnl:+,.0f}</div>
               </div>""")
 
         if not book_cols:
@@ -6944,17 +7840,17 @@ def build_html(daily: dict, chart: dict, summ: dict,
         else:
             book_section = f'<div style="display:flex;gap:12px;flex-wrap:wrap">{"".join(book_cols)}</div>'
 
-        pri_color = {"High": "#B83232", "Medium": "#B8943F", "Low": "#1B6F4A"}
+        pri_color = {"High": "#B83232", "Medium": "#c8b487", "Low": "#1B6F4A"}
         queue_items = sorted((wf_queue or []), key=lambda r: int(r.get("priority_rank", 99) or 99))[:8]
         queue_rows = ""
         for r in queue_items:
             pc = pri_color.get(str(r.get("priority", "")), "#999")
             action = str(r.get("sector_adjusted_action") or r.get("what_to_do", ""))[:100]
-            queue_rows += f"""<tr style="border-bottom:1px solid #F2F1EE">
-              <td style="padding:7px 8px;font-size:11px;color:#AAA;font-weight:700">#{_esc(str(r.get('priority_rank','?')))}</td>
+            queue_rows += f"""<tr style="border-bottom:1px solid #241f18">
+              <td style="padding:7px 8px;font-size:11px;color:#AAA;font-weight:400">#{_esc(str(r.get('priority_rank','?')))}</td>
               <td style="padding:7px 8px" class="td-ticker">{_esc(r.get('ticker',''))}</td>
               <td style="padding:7px 8px;font-size:11.5px;color:#555">{_esc(r.get('sector',''))}</td>
-              <td style="padding:7px 8px"><span style="font-size:10px;font-weight:700;color:{pc};letter-spacing:.5px;text-transform:uppercase;padding:2px 6px;background:{pc}18;border-radius:3px">{_esc(r.get('priority',''))}</span></td>
+              <td style="padding:7px 8px"><span style="font-size:10px;font-weight:400;color:{pc};letter-spacing:.5px;text-transform:uppercase;padding:2px 6px;background:{pc}18;border-radius:3px">{_esc(r.get('priority',''))}</span></td>
               <td style="padding:7px 8px;font-size:12px;color:#1B2A4A">{_esc(action)}</td>
             </tr>"""
         if not queue_rows:
@@ -6964,26 +7860,26 @@ def build_html(daily: dict, chart: dict, summ: dict,
         drift_html = ""
         if drift_items:
             drift_list = ", ".join(f'<strong>{_esc(p["ticker"])}</strong>' for p in drift_items[:6])
-            drift_html = f'<div style="margin-bottom:16px;padding:12px 16px;background:#FEF9EC;border:1px solid #F0E6C8;border-left:4px solid #B8943F;border-radius:6px"><p style="font-size:13px;font-weight:700;color:#B8943F;margin:0 0 4px">Signal direction changed — review needed</p><p style="font-size:12.5px;color:#555;margin:0">{drift_list} entered with a signal that no longer matches current direction.</p></div>'
+            drift_html = f'<div style="margin-bottom:16px;padding:12px 16px;background:#FEF9EC;border:1px solid #43391f;border-left:4px solid #c8b487;border-radius:6px"><p style="font-size:13px;font-weight:400;color:#c8b487;margin:0 0 4px">Signal direction changed — review needed</p><p style="font-size:12.5px;color:#555;margin:0">{drift_list} entered with a signal that no longer matches current direction.</p></div>'
 
-        return f"""<div style="padding:24px;background:linear-gradient(135deg,#F7F6F3 0%,#EEF2F8 100%);border:1px solid #DDE3ED;border-radius:10px;margin-bottom:28px">
+        return f"""<div style="padding:24px;background:linear-gradient(135deg,#241f18 0%,#EEF2F8 100%);border:1px solid #241f18;border-radius:10px;margin-bottom:28px">
       <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:4px">
         <p class="eyebrow" style="margin:0">Trade Command Center</p>
         <span style="font-size:11px;color:#AAA;font-style:italic">Paper trading only — no real money</span>
       </div>
-      <h3 style="font-family:'Playfair Display',serif;font-size:20px;font-weight:700;color:#1A1A1A;margin:0 0 16px">Portfolio health by book &amp; today's action queue</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:20px;font-weight:400;color:#1A1A1A;margin:0 0 16px">Portfolio health by book &amp; today's action queue</h3>
       {drift_html}
       {book_section}
       <div style="margin-top:20px">
-        <p style="font-size:11px;font-weight:700;color:#1B2A4A;text-transform:uppercase;letter-spacing:.7px;margin:0 0 8px">Today's action queue — top 8 by priority</p>
-        <div style="overflow-x:auto;border:1px solid #E2E0DC;border-radius:6px;background:#fff">
+        <p style="font-size:11px;font-weight:400;color:#1B2A4A;text-transform:uppercase;letter-spacing:.7px;margin:0 0 8px">Today's action queue — top 8 by priority</p>
+        <div style="overflow-x:auto;border:1px solid #241f18;border-radius:6px;background:#fff">
           <table style="width:100%;border-collapse:collapse">
-            <thead><tr style="background:#F7F6F3;border-bottom:1px solid #E2E0DC">
-              <th style="text-align:left;padding:8px 8px;color:#AAA;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">#</th>
-              <th style="text-align:left;padding:8px 8px;color:#AAA;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">Ticker</th>
-              <th style="text-align:left;padding:8px 8px;color:#AAA;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">Sector</th>
-              <th style="text-align:left;padding:8px 8px;color:#AAA;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">Priority</th>
-              <th style="text-align:left;padding:8px 8px;color:#AAA;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">Action</th>
+            <thead><tr style="background:#241f18;border-bottom:1px solid #241f18">
+              <th style="text-align:left;padding:8px 8px;color:#AAA;font-size:10px;font-weight:400;letter-spacing:.5px;text-transform:uppercase">#</th>
+              <th style="text-align:left;padding:8px 8px;color:#AAA;font-size:10px;font-weight:400;letter-spacing:.5px;text-transform:uppercase">Ticker</th>
+              <th style="text-align:left;padding:8px 8px;color:#AAA;font-size:10px;font-weight:400;letter-spacing:.5px;text-transform:uppercase">Sector</th>
+              <th style="text-align:left;padding:8px 8px;color:#AAA;font-size:10px;font-weight:400;letter-spacing:.5px;text-transform:uppercase">Priority</th>
+              <th style="text-align:left;padding:8px 8px;color:#AAA;font-size:10px;font-weight:400;letter-spacing:.5px;text-transform:uppercase">Action</th>
             </tr></thead>
             <tbody>{queue_rows}</tbody>
           </table>
@@ -7032,16 +7928,16 @@ def build_html(daily: dict, chart: dict, summ: dict,
                 ppnl_col = "#1B6F4A" if (raw_pnl or 0) > 0 else "#B83232"
                 book = pm.get("book", "")
                 book_tag = f'<span style="font-size:9px;background:#EEF2F8;color:#1B2A4A;padding:1px 4px;border-radius:3px;margin-left:3px">{_esc(book)}</span>' if book and book != "—" else ""
-                portfolio_cell = f'<span style="color:{pdir_col};font-weight:700;font-size:11px">{pdir_txt}</span>{book_tag} <span style="font-size:11px;color:{ppnl_col}">{ppnl_str}</span>'
+                portfolio_cell = f'<span style="color:{pdir_col};font-weight:400;font-size:11px">{pdir_txt}</span>{book_tag} <span style="font-size:11px;color:{ppnl_col}">{ppnl_str}</span>'
             else:
-                portfolio_cell = '<span style="color:#DDD;font-size:11px">—</span>'
+                portfolio_cell = '<span style="color:#241f18;font-size:11px">—</span>'
             rows.append(f"""<tr>
               <td class="td-rank">#{_esc(r.get('alpha_rank',''))}</td>
               <td class="td-ticker">{_esc(r.get('ticker',''))}</td>
               <td style="font-size:11.5px;color:#555">{_esc(r.get('sector',''))}</td>
-              <td><div class="td-score"><div class="score-bar-wrap"><div class="score-bar" style="width:{bar_w}%"></div></div><span style="font-weight:700;color:#1B2A4A">{sc:.1f}</span></div></td>
-              <td><span class="{sig_c}" style="font-size:11px;font-weight:700">{_esc(sig)}</span></td>
-              <td style="font-size:11px;color:{crowd_color};font-weight:600">{_esc(crowd)}</td>
+              <td><div class="td-score"><div class="score-bar-wrap"><div class="score-bar" style="width:{bar_w}%"></div></div><span style="font-weight:400;color:#1B2A4A">{sc:.1f}</span></div></td>
+              <td><span class="{sig_c}" style="font-size:11px;font-weight:400">{_esc(sig)}</span></td>
+              <td style="font-size:11px;color:{crowd_color};font-weight:400">{_esc(crowd)}</td>
               <td style="font-size:11px;line-height:1.4">{" &nbsp; ".join(sigs[:3])}</td>
               <td style="font-size:11px">{portfolio_cell}</td>
             </tr>""")
@@ -7050,7 +7946,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
     def risk_gate_rows():
         if not risk_gate:
             return "<tr><td colspan='6' style='color:#AAA'>No position sizing data yet — run the daily pipeline first.</td></tr>"
-        action_color = {"REDUCE_ONLY": "#B83232", "HOLD": "#B8943F", "OK": "#1B6F4A",
+        action_color = {"REDUCE_ONLY": "#B83232", "HOLD": "#c8b487", "OK": "#1B6F4A",
                         "SIZE_DOWN": "#B83232", "CLEAR": "#1B6F4A"}
         rows = []
         for r in risk_gate:
@@ -7065,7 +7961,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
               <td style="font-size:12px;color:#555">{_esc(r.get('sector',''))}</td>
               <td class="r">{cur_w:.2f}%</td>
               <td class="r" style="color:#1B6F4A">{rec_w:.2f}%</td>
-              <td><span style="font-size:11px;font-weight:700;color:{ac}">{_esc(action_plain)}</span></td>
+              <td><span style="font-size:11px;font-weight:400;color:{ac}">{_esc(action_plain)}</span></td>
               <td style="font-size:11px;color:#888">{_esc(reason)}</td>
             </tr>""")
         return "\n".join(rows)
@@ -7075,9 +7971,9 @@ def build_html(daily: dict, chart: dict, summ: dict,
             return "<p style='color:#AAA;font-size:13px'>No drilldown data. Run daily system.</p>"
         stage_color = {
             "RISK_REPAIR_REQUIRED":   "#B83232",
-            "NON_RISK_GATES_REQUIRED":"#B8943F",
+            "NON_RISK_GATES_REQUIRED":"#c8b487",
             "READY":                   "#1B6F4A",
-            "WATCH":                   "#B8943F",
+            "WATCH":                   "#c8b487",
             "BLOCKED":                 "#B83232",
             "CLEAR":                   "#1B6F4A",
         }
@@ -7087,23 +7983,23 @@ def build_html(daily: dict, chart: dict, summ: dict,
             sc = stage_color.get(stage, "#999")
             stage_plain = _STAGE_PLAIN.get(stage, stage.replace("_"," ").title())
             score = float(r.get("readiness_score",0) or 0)
-            cards.append(f"""<div style="background:#fff;border:1px solid #E2E0DC;border-left:4px solid {sc};padding:16px 20px;margin-bottom:10px">
+            cards.append(f"""<div style="background:#fff;border:1px solid #241f18;border-left:4px solid {sc};padding:16px 20px;margin-bottom:10px">
               <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px">
                 <div>
-                  <span style="font-family:'Playfair Display',serif;font-size:18px;font-weight:700;color:#1B2A4A">{_esc(r.get('ticker',''))}</span>
+                  <span style="font-family:'Playfair Display',serif;font-size:18px;font-weight:400;color:#1B2A4A">{_esc(r.get('ticker',''))}</span>
                   <span style="font-size:11px;color:#999;margin-left:8px">{_esc(r.get('sector',''))}</span>
                 </div>
                 <div style="text-align:right;flex-shrink:0">
-                  <p style="font-size:11px;color:{sc};font-weight:700">{_esc(stage_plain)}</p>
-                  <p style="font-family:'Playfair Display',serif;font-size:20px;font-weight:700;color:#1B2A4A;line-height:1">{score:.0f}<span style="font-size:11px;color:#BBB">/100</span></p>
+                  <p style="font-size:11px;color:{sc};font-weight:400">{_esc(stage_plain)}</p>
+                  <p style="font-family:'Playfair Display',serif;font-size:20px;font-weight:400;color:#1B2A4A;line-height:1">{score:.0f}<span style="font-size:11px;color:#BBB">/100</span></p>
                 </div>
               </div>
               <p style="font-size:13px;color:#333;line-height:1.55;margin-bottom:8px">{_esc(str(r.get('why_blocked_plain_english',''))[:300])}</p>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding-top:10px;border-top:1px solid #F0EFEC">
-                <div><p style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:600;margin-bottom:3px">First blocker</p><p style="font-size:12px;color:#1B2A4A;font-weight:600">{_esc(r.get('first_blocking_gate',''))}</p></div>
-                <div><p style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:600;margin-bottom:3px">How to clear it</p><p style="font-size:12px;color:#555">{_esc(str(r.get('first_clear_condition',''))[:120])}</p></div>
-                <div><p style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:600;margin-bottom:3px">Current view</p><p style="font-size:12px;color:#555">{_esc(str(r.get('decision_room_summary',''))[:120])}</p></div>
-                <div><p style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:600;margin-bottom:3px">Watch for</p><p style="font-size:12px;color:#B8943F;font-weight:600">{_esc(_clean_trigger(str(r.get('trigger_to_watch','')))[:120])}</p></div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding-top:10px;border-top:1px solid #241f18">
+                <div><p style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:400;margin-bottom:3px">First blocker</p><p style="font-size:12px;color:#1B2A4A;font-weight:400">{_esc(r.get('first_blocking_gate',''))}</p></div>
+                <div><p style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:400;margin-bottom:3px">How to clear it</p><p style="font-size:12px;color:#555">{_esc(str(r.get('first_clear_condition',''))[:120])}</p></div>
+                <div><p style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:400;margin-bottom:3px">Current view</p><p style="font-size:12px;color:#555">{_esc(str(r.get('decision_room_summary',''))[:120])}</p></div>
+                <div><p style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:400;margin-bottom:3px">Watch for</p><p style="font-size:12px;color:#c8b487;font-weight:400">{_esc(_clean_trigger(str(r.get('trigger_to_watch','')))[:120])}</p></div>
               </div>
             </div>""")
         return "\n".join(cards)
@@ -7111,8 +8007,8 @@ def build_html(daily: dict, chart: dict, summ: dict,
     def sector_cycle_rows():
         if not sector_cycle:
             return "<tr><td colspan='6' style='color:#AAA'>No sector data</td></tr>"
-        state_color = {"Leadership expansion":"#1B6F4A","Crowded leadership":"#B8943F",
-                       "Early improvement":"#2563EB","Downcycle / laggard":"#B83232","Neutral":"#999"}
+        state_color = {"Leadership expansion":"#1B6F4A","Crowded leadership":"#c8b487",
+                       "Early improvement":"#5f7480","Downcycle / laggard":"#B83232","Neutral":"#999"}
         rows = []
         for r in sector_cycle:
             state = str(r.get("cycle_state",""))
@@ -7129,11 +8025,11 @@ def build_html(daily: dict, chart: dict, summ: dict,
             rows.append(f"""<tr>
               <td class="td-ticker">{_esc(r.get('etf',''))}</td>
               <td style="font-size:12.5px;color:#333">{_esc(r.get('sector',''))}</td>
-              <td><span style="font-size:11px;font-weight:700;color:{sc}">{_esc(state)}</span></td>
+              <td><span style="font-size:11px;font-weight:400;color:{sc}">{_esc(state)}</span></td>
               <td class="r {'pos' if ret20>=0 else 'neg'}">{ret20:+.1f}%</td>
               <td class="r {'pos' if ret63>=0 else 'neg'}">{ret63:+.1f}%</td>
               <td class="r">{f"{wt:.1f}%" if wt else "—"}</td>
-              <td style="font-size:11px;color:#B83232;font-weight:600">{_esc(cap_disp)}</td>
+              <td style="font-size:11px;color:#B83232;font-weight:400">{_esc(cap_disp)}</td>
             </tr>""")
         return "\n".join(rows)
 
@@ -7143,7 +8039,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
         import re as _re
         cards = []
         for idx, item in enumerate(news[:30]):
-            tone_bg  = {"#1B6F4A": "#E8F5E9", "#B83232": "#FDECEA"}.get(item["tone_color"], "#FEF9EC")
+            tone_bg  = {"#1B6F4A": "#241f18", "#B83232": "#FDECEA"}.get(item["tone_color"], "#FEF9EC")
             catalysts = item.get("catalysts", "")
             risks_txt = item.get("risks", "")
             action = _esc(item.get("action_hint", ""))
@@ -7178,7 +8074,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
             if risks_txt and risks_txt not in ("nan", ""):
                 detail_parts.append(f'<p style="font-size:11.5px;color:#B83232;margin:3px 0"><strong>Risks to watch:</strong> {_esc(risks_txt[:300])}</p>')
             if link:
-                detail_parts.append(f'<a href="{_esc(link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:10px;font-size:12px;font-weight:700;color:#fff;background:#1B2A4A;text-decoration:none;padding:6px 16px;border-radius:3px">Open source article →</a>')
+                detail_parts.append(f'<a href="{_esc(link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:10px;font-size:12px;font-weight:400;color:#fff;background:#1B2A4A;text-decoration:none;padding:6px 16px;border-radius:3px">Open source article →</a>')
             detail_html = "".join(detail_parts)
             cards.append(f"""<div class="news-card {item['tone_class']}" onclick="toggleNews('{card_id}')" style="cursor:pointer">
               {pos_badge}
@@ -7187,13 +8083,13 @@ def build_html(daily: dict, chart: dict, summ: dict,
                   <p class="news-ticker">{_esc(tk)}</p>
                   <span class="news-tone" style="background:{tone_bg};color:{item['tone_color']}">{_esc(item['tone'])}</span>
                 </div>
-                <span id="{card_id}-arrow" style="font-size:11px;color:#1B2A4A;background:#F0F4F9;border:1px solid #C7D2E0;padding:3px 8px;border-radius:3px;font-weight:600;flex-shrink:0">Tap to expand ▼</span>
+                <span id="{card_id}-arrow" style="font-size:11px;color:#1B2A4A;background:#F0F4F9;border:1px solid #283038;padding:3px 8px;border-radius:3px;font-weight:400;flex-shrink:0">Tap to expand ▼</span>
               </div>
               <p class="news-title">{_esc(item['title'])}</p>
               {f'<p class="news-summary">{_esc(logic_clean)}</p>' if logic_clean else ''}
               <p class="news-meta">{_esc(item.get('publisher',''))} &middot; {_esc(item.get('published',''))}</p>
               {f'<p class="news-action">→ {action}</p>' if action else ''}
-              <div id="{card_id}" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #E2E0DC">
+              <div id="{card_id}" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #241f18">
                 {detail_html}
               </div>
             </div>""")
@@ -7213,7 +8109,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
               <p class="breadth-ticker">{_esc(b['ticker'])}</p>
               <p class="breadth-name">{_esc(b['name'])}</p>
               <p class="breadth-val">${b['close']:,.2f}</p>
-              <p style="font-size:12px;color:{'#1B6F4A' if b['ret_20d']>=0 else '#B83232'};font-weight:600">{b['ret_20d_str']} past month</p>
+              <p style="font-size:12px;color:{'#1B6F4A' if b['ret_20d']>=0 else '#B83232'};font-weight:400">{b['ret_20d_str']} past month</p>
               <span class="breadth-badge {b['trend_class']}">{_esc(b['trend'])}</span>
               <p style="font-size:11px;color:#999;margin-top:6px">{above_txt}</p>
             </div>""")
@@ -7275,7 +8171,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
             for fkey, (fname, fdesc) in FACTOR_PLAIN.items():
                 val = row.get(fkey, 0)
                 vc  = "#1B6F4A" if val > 0 else "#B83232"
-                factor_rows += f'<div class="ff5-factor-row"><span style="color:#999">{fname}</span><span style="font-weight:700;color:{vc}">{val:+.3f}</span></div>'
+                factor_rows += f'<div class="ff5-factor-row"><span style="color:#999">{fname}</span><span style="font-weight:400;color:{vc}">{val:+.3f}</span></div>'
             cards.append(f"""<div class="ff5-card">
               <p class="ff5-window">{_esc(row['window'])}</p>
               <p class="ff5-alpha" style="color:{alpha_color}">{row['alpha_str']}</p>
@@ -7345,19 +8241,19 @@ def build_html(daily: dict, chart: dict, summ: dict,
           datasets: [
             {{label:'Buy positions',data:{lc},backgroundColor:'rgba(27,111,74,0.7)',stack:'s'}},
             {{label:'Avoid positions',data:{sc},backgroundColor:'rgba(184,50,50,0.6)',stack:'s'}},
-            {{label:"Model's extra value",data:{ac},backgroundColor:'rgba(27,42,74,0.75)',stack:'a'}},
+            {{label:"Model's extra value",data:{ac},backgroundColor:'rgba(90,100,116,0.55)',stack:'a'}},
             {{label:'Market movement',data:{mc},backgroundColor:'rgba(180,175,165,0.5)',stack:'a'}},
           ]
         }},
         options: {{
           responsive:true,maintainAspectRatio:false,
           plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}},color:'#666'}}}},
-            tooltip:{{backgroundColor:'#fff',titleColor:'#1A1A1A',bodyColor:'#555',borderColor:'#E2E0DC',borderWidth:1,padding:10,
+            tooltip:{{backgroundColor:'#fff',titleColor:'#1A1A1A',bodyColor:'#555',borderColor:'#241f18',borderWidth:1,padding:10,
               callbacks:{{label: ctx => `  ${{ctx.dataset.label}}: ${{ctx.parsed.y.toFixed(2)}}%`}}}}
           }},
           scales:{{
             x:{{grid:{{display:false}},border:{{display:false}},ticks:{{color:'#BBB',font:{{size:10}}}}}},
-            y:{{grid:{{color:'#F2F1EE'}},border:{{display:false}},stacked:false,
+            y:{{grid:{{color:'#241f18'}},border:{{display:false}},stacked:false,
               ticks:{{color:'#BBB',font:{{size:11}},callback: v => v.toFixed(1)+'%'}}}}
           }}
         }}
@@ -7377,7 +8273,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
             _CROWD_LABEL2 = {"WATCH":"Crowded ⚠","HIGH":"Heavily crowded","CLEAR":"Normal","LOW":"Uncrowded"}
             side_disp = "Long" if p["side"] == "LONG" else "Short"
             side_cls  = "long" if p["side"] == "LONG" else "short"
-            pnl_color = "#1B6F4A" if (p["pnl"] or 0) > 0 else ("#B83232" if (p["pnl"] or 0) < 0 else "#B8943F")
+            pnl_color = "#1B6F4A" if (p["pnl"] or 0) > 0 else ("#B83232" if (p["pnl"] or 0) < 0 else "#c8b487")
             sig_raw   = str(p.get("signal","")).upper()
             sig_disp  = _POS_SIG_LABEL.get(sig_raw, sig_raw.title() if sig_raw else "—")
             sig_cls   = "good" if sig_raw in ("BUY","LONG","STRONG BUY") else ("bad" if sig_raw in ("SELL","SHORT","STRONG SELL") else "neu")
@@ -7388,7 +8284,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
             aligned_txt  = ("✓ Signal still aligned with position" if p["aligned"]
                            else ("⚠ Signal direction changed — review needed" if p["aligned"] is False
                            else "— Signal check pending"))
-            risk_color = {"bad": "#B83232", "neu": "#B8943F", "good": "#1B6F4A"}.get(p["risk_cls"], "#999")
+            risk_color = {"bad": "#B83232", "neu": "#c8b487", "good": "#1B6F4A"}.get(p["risk_cls"], "#999")
             stale_note = f'<p class="pos-stale">Price as of {p["price_date"]} — click ⟳ Refresh Now for latest</p>' if p["stale"] > 0 else ""
             curr_str = f"${p['curr']:,.2f}" if p["curr"] else "—"
             entry_str = f"${p['entry']:,.2f}" if p["entry"] else "—"
@@ -7399,17 +8295,17 @@ def build_html(daily: dict, chart: dict, summ: dict,
             action_rec = str(p.get("action_rec", "—"))
             action_pri = str(p.get("action_priority", "—"))
             unrealized_pnl_usd = p.get("unrealized_pnl_usd", 0) or 0
-            book_color = {"SHORT": "#B83232", "MEDIUM": "#B8943F", "LONG": "#1B2A4A"}.get(book.upper(), "#999")
+            book_color = {"SHORT": "#B83232", "MEDIUM": "#c8b487", "LONG": "#1B2A4A"}.get(book.upper(), "#999")
             pred_mu_str = f"{pred_mu*100:+.1f}%" if pred_mu else "—"
             alpha_vs_pred_str = f"{alpha_vs_pred*100:+.1f}%" if alpha_vs_pred else "—"
             avp_color = "#1B6F4A" if alpha_vs_pred > 0 else "#B83232"
             mv_str = f"${mv:,.0f}" if mv else "—"
             upnl_color = "#1B6F4A" if unrealized_pnl_usd > 0 else "#B83232"
             upnl_str = f"${unrealized_pnl_usd:+,.0f}" if unrealized_pnl_usd else "—"
-            action_color = "#B83232" if "SELL" in action_pri.upper() or "REDUCE" in action_pri.upper() else ("#1B6F4A" if "BUY" in action_pri.upper() else "#B8943F")
-            book_badge = f'<span style="font-size:10px;font-weight:700;background:{book_color};color:#fff;padding:2px 6px;border-radius:3px;margin-left:6px">{_esc(book)}</span>' if book != "—" else ""
-            pred_row = "" if pred_mu == 0 else f'<div style="display:flex;gap:16px;margin-top:8px;padding:8px 10px;background:#F7F6F3;border-radius:6px"><div><span style="font-size:10px;color:#AAA">Model predicted</span><br><span style="font-size:13px;font-weight:700;color:#1B2A4A">{pred_mu_str}</span></div><div><span style="font-size:10px;color:#AAA">vs actual (alpha)</span><br><span style="font-size:13px;font-weight:700;color:{avp_color}">{alpha_vs_pred_str}</span></div><div><span style="font-size:10px;color:#AAA">Market value</span><br><span style="font-size:13px;font-weight:700;color:#1B2A4A">{mv_str}</span></div><div><span style="font-size:10px;color:#AAA">Unrealized P&amp;L $</span><br><span style="font-size:13px;font-weight:700;color:{upnl_color}">{upnl_str}</span></div></div>'
-            action_row = "" if action_rec == "—" else f'<div style="margin-top:8px;padding:8px 10px;border-left:3px solid {action_color};background:#F7F6F3;border-radius:0 6px 6px 0"><span style="font-size:10px;color:#AAA;text-transform:uppercase;letter-spacing:.5px">Today\'s action</span><br><span style="font-size:12px;color:#1A1A1A">{_esc(action_rec[:120])}</span></div>'
+            action_color = "#B83232" if "SELL" in action_pri.upper() or "REDUCE" in action_pri.upper() else ("#1B6F4A" if "BUY" in action_pri.upper() else "#c8b487")
+            book_badge = f'<span style="font-size:10px;font-weight:400;background:{book_color};color:#fff;padding:2px 6px;border-radius:3px;margin-left:6px">{_esc(book)}</span>' if book != "—" else ""
+            pred_row = "" if pred_mu == 0 else f'<div style="display:flex;gap:16px;margin-top:8px;padding:8px 10px;background:#241f18;border-radius:6px"><div><span style="font-size:10px;color:#AAA">Model predicted</span><br><span style="font-size:13px;font-weight:400;color:#1B2A4A">{pred_mu_str}</span></div><div><span style="font-size:10px;color:#AAA">vs actual (alpha)</span><br><span style="font-size:13px;font-weight:400;color:{avp_color}">{alpha_vs_pred_str}</span></div><div><span style="font-size:10px;color:#AAA">Market value</span><br><span style="font-size:13px;font-weight:400;color:#1B2A4A">{mv_str}</span></div><div><span style="font-size:10px;color:#AAA">Unrealized P&amp;L $</span><br><span style="font-size:13px;font-weight:400;color:{upnl_color}">{upnl_str}</span></div></div>'
+            action_row = "" if action_rec == "—" else f'<div style="margin-top:8px;padding:8px 10px;border-left:3px solid {action_color};background:#241f18;border-radius:0 6px 6px 0"><span style="font-size:10px;color:#AAA;text-transform:uppercase;letter-spacing:.5px">Today\'s action</span><br><span style="font-size:12px;color:#1A1A1A">{_esc(action_rec[:120])}</span></div>'
             cards.append(f"""<div class="pos-card {side_cls}">
               <div class="pos-header">
                 <div>
@@ -7454,26 +8350,26 @@ def build_html(daily: dict, chart: dict, summ: dict,
         ss = crowding.get("short_semis", [])
         semi_warn = ""
         if len(ls) >= 3:
-            semi_warn = f'<div style="background:#FEF9EC;border:1px solid #F0E6C8;border-left:4px solid #B8943F;padding:12px 16px;margin-bottom:12px"><p style="font-size:13px;font-weight:700;color:#B8943F;margin-bottom:4px">⚠ Semiconductor concentration — {len(ls)} long positions</p><p style="font-size:12.5px;color:#555">{", ".join(ls)} are all semiconductors. If the sector sells off, all {len(ls)} move together. Consider whether this is intentional.</p></div>'
+            semi_warn = f'<div style="background:#FEF9EC;border:1px solid #43391f;border-left:4px solid #c8b487;padding:12px 16px;margin-bottom:12px"><p style="font-size:13px;font-weight:400;color:#c8b487;margin-bottom:4px">⚠ Semiconductor concentration — {len(ls)} long positions</p><p style="font-size:12.5px;color:#555">{", ".join(ls)} are all semiconductors. If the sector sells off, all {len(ls)} move together. Consider whether this is intentional.</p></div>'
 
         crowd_watch = crowding.get("watch_tickers", [])
         watch_warn = ""
         if crowd_watch:
-            watch_warn = f'<div style="background:#FDECEA;border:1px solid #F0C4C4;border-left:4px solid #B83232;padding:12px 16px;margin-bottom:12px"><p style="font-size:13px;font-weight:700;color:#B83232;margin-bottom:4px">Widely held by other funds — watch closely: {", ".join(crowd_watch)}</p><p style="font-size:12.5px;color:#555">These stocks are heavily owned by many quant and hedge funds at the same time. If those funds all sell at once, the price can drop sharply and fast — even if the company itself is fine.</p></div>'
+            watch_warn = f'<div style="background:#FDECEA;border:1px solid #3a2724;border-left:4px solid #B83232;padding:12px 16px;margin-bottom:12px"><p style="font-size:13px;font-weight:400;color:#B83232;margin-bottom:4px">Widely held by other funds — watch closely: {", ".join(crowd_watch)}</p><p style="font-size:12.5px;color:#555">These stocks are heavily owned by many quant and hedge funds at the same time. If those funds all sell at once, the price can drop sharply and fast — even if the company itself is fine.</p></div>'
 
         sc = crowding.get("sector_concentration", {})
-        sc_rows = "".join(f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #F7F6F3"><span style="font-size:12.5px;color:#333">{_esc(k)}</span><span style="font-size:12px;font-weight:700;color:#1B2A4A">{v} positions</span></div>' for k,v in sorted(sc.items(), key=lambda x:-x[1]))
+        sc_rows = "".join(f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #241f18"><span style="font-size:12.5px;color:#333">{_esc(k)}</span><span style="font-size:12px;font-weight:400;color:#1B2A4A">{v} positions</span></div>' for k,v in sorted(sc.items(), key=lambda x:-x[1]))
 
         return f"""
       <div class="crowd-kpi-row">
         <div class="crowd-kpi {beta_cls}">
           <p class="crowd-label">Moves with market</p>
-          <p class="crowd-val" style="color:{'#B83232' if beta_cls=='bad' else '#B8943F' if beta_cls=='warn' else '#1B6F4A'}">{beta:.2f}</p>
+          <p class="crowd-val" style="color:{'#B83232' if beta_cls=='bad' else '#c8b487' if beta_cls=='warn' else '#1B6F4A'}">{beta:.2f}</p>
           <p class="crowd-note">{beta_note}</p>
         </div>
         <div class="crowd-kpi {mom_cls}">
           <p class="crowd-label">Overlap with other funds</p>
-          <p class="crowd-val" style="color:{'#B83232' if mom_cls=='bad' else '#B8943F' if mom_cls=='warn' else '#1B6F4A'}">{mom:.2f}</p>
+          <p class="crowd-val" style="color:{'#B83232' if mom_cls=='bad' else '#c8b487' if mom_cls=='warn' else '#1B6F4A'}">{mom:.2f}</p>
           <p class="crowd-note">{mom_note}</p>
         </div>
         <div class="crowd-kpi {'bad' if crowd_watch else 'good'}">
@@ -7484,8 +8380,8 @@ def build_html(daily: dict, chart: dict, summ: dict,
       </div>
       {watch_warn}
       {semi_warn}
-      <div style="background:#fff;border:1px solid #E2E0DC;padding:18px 20px;margin-top:16px">
-        <p style="font-size:12px;font-weight:700;color:#1A1A1A;margin-bottom:8px">How many buy positions are in each industry sector</p>
+      <div style="background:#fff;border:1px solid #241f18;padding:18px 20px;margin-top:16px">
+        <p style="font-size:12px;font-weight:400;color:#1A1A1A;margin-bottom:8px">How many buy positions are in each industry sector</p>
         {sc_rows if sc_rows else '<p style="color:#AAA;font-size:12px">No data</p>'}
       </div>"""
 
@@ -7542,7 +8438,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
     ric_status_raw = rolling_ic.get("current_status", "—")
     # Live IC display helpers
     _ric_last_date = rolling_ic.get("labels", ["—"])[-1] if rolling_ic.get("labels") else "—"
-    _live_ic_color = "#6BCCA0" if ric_cur > 0.10 else ("#B8943F" if ric_cur >= 0 else "#B83232")
+    _live_ic_color = "#6BCCA0" if ric_cur > 0.10 else ("#c8b487" if ric_cur >= 0 else "#B83232")
     _live_ic_label = "Signal healthy" if ric_cur > 0.10 else ("Weakening — watch" if ric_cur >= 0 else "Alert — model degraded")
     _RIC_STATUS_HUMAN = {
         "IC_OK":             "Signal is healthy",
@@ -7575,7 +8471,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Canyon">
-  <meta name="theme-color" content="#0D1B35">
+  <meta name="theme-color" content="#231a12">
   <link rel="manifest" href="/manifest.json">
   <script>if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(function(){{}});</script>
   <title>Canyon Quant v9 — Research</title>
@@ -7589,24 +8485,24 @@ def build_html(daily: dict, chart: dict, summ: dict,
     .container{{max-width:1080px;margin:0 auto;padding:0 48px}}
 
     /* NAV */
-    nav{{background:#1B2A4A;position:sticky;top:0;z-index:200;border-bottom:2px solid #B8943F}}
+    nav{{background:#1B2A4A;position:sticky;top:0;z-index:200;border-bottom:2px solid #c8b487}}
     nav .inner{{max-width:1080px;margin:0 auto;padding:0 48px;display:flex;align-items:stretch;justify-content:space-between;height:54px}}
-    .nav-brand{{display:flex;align-items:center;color:#fff;font-family:'Playfair Display',serif;font-size:16px;font-weight:700;letter-spacing:1px;text-decoration:none;flex-shrink:0;gap:4px}}
-    .nav-brand span{{color:#B8943F}}
+    .nav-brand{{display:flex;align-items:center;color:#fff;font-family:'Playfair Display',serif;font-size:16px;font-weight:400;letter-spacing:1px;text-decoration:none;flex-shrink:0;gap:4px}}
+    .nav-brand span{{color:#c8b487}}
     .nav-tabs{{display:flex;align-items:stretch;overflow:visible}}
-    .nav-tabs a{{display:flex;align-items:center;padding:0 16px;color:rgba(255,255,255,.55);text-decoration:none;font-size:11px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;border-left:1px solid rgba(255,255,255,.07);cursor:pointer;white-space:nowrap;transition:color .15s,background .15s;border-bottom:3px solid transparent}}
+    .nav-tabs a{{display:flex;align-items:center;padding:0 16px;color:rgba(255,255,255,.55);text-decoration:none;font-size:11px;font-weight:400;letter-spacing:1.2px;text-transform:uppercase;border-left:1px solid rgba(255,255,255,.07);cursor:pointer;white-space:nowrap;transition:color .15s,background .15s;border-bottom:3px solid transparent}}
     .nav-tabs a:hover{{color:#fff;background:rgba(255,255,255,.05)}}
-    .nav-tabs a.active{{color:#fff;border-bottom-color:#B8943F}}
+    .nav-tabs a.active{{color:#fff;border-bottom-color:#c8b487}}
     /* Dropdown groups */
     .nav-group{{position:relative;display:flex;align-items:stretch}}
-    .nav-group-btn{{display:flex;align-items:center;padding:0 16px;color:rgba(255,255,255,.55);text-decoration:none;font-size:11px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;border-left:1px solid rgba(255,255,255,.07);cursor:pointer;white-space:nowrap;transition:color .15s,background .15s;border-bottom:3px solid transparent;user-select:none}}
+    .nav-group-btn{{display:flex;align-items:center;padding:0 16px;color:rgba(255,255,255,.55);text-decoration:none;font-size:11px;font-weight:400;letter-spacing:1.2px;text-transform:uppercase;border-left:1px solid rgba(255,255,255,.07);cursor:pointer;white-space:nowrap;transition:color .15s,background .15s;border-bottom:3px solid transparent;user-select:none}}
     .nav-group:hover .nav-group-btn,.nav-group-btn:hover{{color:#fff;background:rgba(255,255,255,.05)}}
-    .nav-group.active .nav-group-btn{{color:#fff;border-bottom-color:#B8943F}}
-    .nav-dropdown{{display:none;position:absolute;top:100%;left:0;min-width:190px;background:#0F1B32;border:1px solid rgba(255,255,255,.12);border-top:2px solid #B8943F;border-radius:0 0 6px 6px;box-shadow:0 8px 28px rgba(0,0,0,.5);z-index:9999}}
+    .nav-group.active .nav-group-btn{{color:#fff;border-bottom-color:#c8b487}}
+    .nav-dropdown{{display:none;position:absolute;top:100%;left:0;min-width:190px;background:#0F1B32;border:1px solid rgba(255,255,255,.12);border-top:2px solid #c8b487;border-radius:0 0 6px 6px;box-shadow:0 8px 28px rgba(0,0,0,.5);z-index:9999}}
     .nav-dropdown.open{{display:block}}
-    .nav-dropdown a{{display:block;padding:10px 18px;color:rgba(255,255,255,.6);font-size:11px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;border-left:none!important;border-bottom:1px solid rgba(255,255,255,.05)!important;text-decoration:none;cursor:pointer;white-space:nowrap;transition:background .12s,color .12s}}
+    .nav-dropdown a{{display:block;padding:10px 18px;color:rgba(255,255,255,.6);font-size:11px;font-weight:400;letter-spacing:.8px;text-transform:uppercase;border-left:none!important;border-bottom:1px solid rgba(255,255,255,.05)!important;text-decoration:none;cursor:pointer;white-space:nowrap;transition:background .12s,color .12s}}
     .nav-dropdown a:last-child{{border-bottom:none!important}}
-    .nav-dropdown a:hover,.nav-dropdown a.active{{background:rgba(184,148,63,.18);color:#B8943F}}
+    .nav-dropdown a:hover,.nav-dropdown a.active{{background:rgba(184,148,63,.18);color:#c8b487}}
     .nav-date{{display:flex;align-items:center;color:rgba(255,255,255,.38);font-size:11px;flex-shrink:0;padding-left:20px}}
 
     /* TABS */
@@ -7614,275 +8510,275 @@ def build_html(daily: dict, chart: dict, summ: dict,
     .tab-section.active{{display:block}}
 
     /* TYPOGRAPHY */
-    .eyebrow{{font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:#B8943F;font-weight:600;margin-bottom:10px}}
-    .section-head{{font-size:32px;color:#1A1A1A;line-height:1.15;font-weight:700;margin-bottom:8px}}
-    .rule{{width:40px;height:2px;background:#B8943F;margin:14px 0 26px}}
+    .eyebrow{{font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:#c8b487;font-weight:400;margin-bottom:10px}}
+    .section-head{{font-size:32px;color:#1A1A1A;line-height:1.15;font-weight:400;margin-bottom:8px}}
+    .rule{{width:40px;height:2px;background:#c8b487;margin:14px 0 26px}}
     .lead{{font-size:15px;color:#666;max-width:640px;margin-bottom:30px;font-weight:300;line-height:1.8}}
     .prose{{font-size:15px;line-height:1.85;color:#2D2D2D}}
     .prose p{{margin-bottom:18px}}
 
     /* HERO STRIP */
     .hero{{background:#1B2A4A;padding:56px 0 48px}}
-    .hero-eye{{font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:#B8943F;font-weight:600;margin-bottom:14px}}
-    .hero h1{{font-size:52px;color:#fff;line-height:1.1;font-weight:700}}
-    .hero-sub{{font-size:52px;color:#B8943F;font-style:italic;display:block;line-height:1.1;margin-bottom:16px}}
+    .hero-eye{{font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:#c8b487;font-weight:400;margin-bottom:14px}}
+    .hero h1{{font-size:52px;color:#fff;line-height:1.1;font-weight:400}}
+    .hero-sub{{font-size:52px;color:#c8b487;font-style:italic;display:block;line-height:1.1;margin-bottom:16px}}
     .hero-desc{{color:rgba(255,255,255,.55);font-size:16px;max-width:560px;margin-bottom:44px;font-weight:300;line-height:1.7}}
     .kpi-grid{{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:rgba(255,255,255,.10)}}
     .kpi{{background:#1B2A4A;padding:24px;border-left:1px solid rgba(255,255,255,.08)}}
     .kpi:first-child{{border-left:none}}
-    .kpi-label{{font-size:10px;letter-spacing:1.8px;text-transform:uppercase;color:rgba(255,255,255,.45);margin-bottom:8px;font-weight:600}}
-    .kpi-val{{font-family:'Playfair Display',serif;font-size:38px;color:#fff;line-height:1;font-weight:700}}
+    .kpi-label{{font-size:10px;letter-spacing:1.8px;text-transform:uppercase;color:rgba(255,255,255,.45);margin-bottom:8px;font-weight:400}}
+    .kpi-val{{font-family:'Playfair Display',serif;font-size:38px;color:#fff;line-height:1;font-weight:400}}
     .kpi-val.g{{color:#6BCCA0}}
     .kpi-note{{font-size:11px;color:rgba(255,255,255,.32);margin-top:6px}}
 
     /* TODAY */
     .today-hero{{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:14px;margin-bottom:36px}}
-    .today-card{{background:#fff;border:1px solid #E2E0DC;padding:20px 22px}}
-    .today-card-label{{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:600;margin-bottom:6px}}
-    .today-card-val{{font-family:'Playfair Display',serif;font-size:28px;font-weight:700;line-height:1}}
+    .today-card{{background:#fff;border:1px solid #241f18;padding:20px 22px}}
+    .today-card-label{{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:400;margin-bottom:6px}}
+    .today-card-val{{font-family:'Playfair Display',serif;font-size:28px;font-weight:400;line-height:1}}
     .today-card-note{{font-size:11px;color:#AAA;margin-top:5px}}
     .two-col-65{{display:grid;grid-template-columns:1.3fr 1fr;gap:32px;align-items:start}}
     .two-col-even{{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}}
 
     /* TABLES */
     .tbl-wrap{{margin-top:8px}}
-    .tbl-title{{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:600;margin-bottom:8px}}
+    .tbl-title{{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:400;margin-bottom:8px}}
     table{{width:100%;border-collapse:collapse;font-size:13.5px}}
-    thead th{{text-align:left;padding:7px 12px;font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:#999;font-weight:600;border-bottom:2px solid #1B2A4A;white-space:nowrap}}
+    thead th{{text-align:left;padding:7px 12px;font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:#999;font-weight:400;border-bottom:2px solid #1B2A4A;white-space:nowrap}}
     thead th.r{{text-align:right}}
-    tbody tr{{border-bottom:1px solid #ECEAE6}}
-    tbody tr:hover{{background:#F7F6F3}}
+    tbody tr{{border-bottom:1px solid #241f18}}
+    tbody tr:hover{{background:#241f18}}
     tbody tr:last-child{{border-bottom:2px solid #1B2A4A}}
     tbody td{{padding:9px 12px}}
     tbody td.r{{text-align:right;font-variant-numeric:tabular-nums}}
-    .pos{{color:#1B6F4A;font-weight:600}}
-    .neg{{color:#B83232;font-weight:600}}
+    .pos{{color:#1B6F4A;font-weight:400}}
+    .neg{{color:#B83232;font-weight:400}}
     tr.tr-strong{{background:#F7FCF9}}
-    .td-ticker{{font-weight:700;color:#1B2A4A;font-family:'Playfair Display',serif;font-size:15px}}
+    .td-ticker{{font-weight:400;color:#1B2A4A;font-family:'Playfair Display',serif;font-size:15px}}
     .td-rank{{color:#BBB;font-size:11px;width:30px}}
     .td-score{{display:flex;align-items:center;gap:8px}}
-    .score-bar-wrap{{width:60px;height:5px;background:#F0EFEC;border-radius:2px;flex-shrink:0}}
+    .score-bar-wrap{{width:60px;height:5px;background:#241f18;border-radius:2px;flex-shrink:0}}
     .score-bar{{height:100%;background:#1B2A4A;border-radius:2px}}
     .tbl-note{{font-size:11px;color:#BBB;margin-top:8px;line-height:1.6}}
 
     /* CHART */
-    .chart-box{{background:#fff;border:1px solid #E2E0DC;padding:24px 24px 16px;margin-top:28px}}
-    .chart-title{{font-size:14px;font-weight:600;color:#1A1A1A;margin-bottom:2px}}
+    .chart-box{{background:#fff;border:1px solid #241f18;padding:24px 24px 16px;margin-top:28px}}
+    .chart-title{{font-size:14px;font-weight:400;color:#1A1A1A;margin-bottom:2px}}
     .chart-sub{{font-size:12px;color:#AAA;margin-bottom:18px}}
     .chart-inner{{position:relative;height:300px}}
 
     /* IC STACK */
     .ic-stack{{display:flex;flex-direction:column;gap:8px}}
-    .ic-row{{display:flex;align-items:center;gap:12px;padding:9px 12px;background:#fff;border:1px solid #E2E0DC}}
-    .ic-name{{font-size:12.5px;font-weight:600;color:#1A1A1A;width:200px;flex-shrink:0}}
+    .ic-row{{display:flex;align-items:center;gap:12px;padding:9px 12px;background:#fff;border:1px solid #241f18}}
+    .ic-name{{font-size:12.5px;font-weight:400;color:#1A1A1A;width:200px;flex-shrink:0}}
     .ic-step{{font-size:10px;color:#CCC;width:48px;flex-shrink:0}}
-    .ic-bar-wrap{{flex:1;height:6px;background:#F0EFEC;border-radius:2px;overflow:hidden}}
+    .ic-bar-wrap{{flex:1;height:6px;background:#241f18;border-radius:2px;overflow:hidden}}
     .ic-bar{{height:100%;border-radius:2px}}
-    .ic-bar.s{{background:#1B6F4A}}.ic-bar.m{{background:#B8943F}}.ic-bar.w{{background:#CCC}}
-    .ic-val{{font-family:'Playfair Display',serif;font-size:15px;font-weight:700;color:#1B2A4A;width:52px;text-align:right;flex-shrink:0}}
-    .ic-badge{{font-size:10px;letter-spacing:.8px;text-transform:uppercase;font-weight:700;padding:2px 6px;border-radius:2px;flex-shrink:0}}
-    .b-s{{background:#EAF5EE;color:#1B6F4A}}.b-m{{background:#FEF5E7;color:#B8943F}}.b-w{{background:#F3F3F3;color:#999}}
+    .ic-bar.s{{background:#1B6F4A}}.ic-bar.m{{background:#c8b487}}.ic-bar.w{{background:#CCC}}
+    .ic-val{{font-family:'Playfair Display',serif;font-size:15px;font-weight:400;color:#1B2A4A;width:52px;text-align:right;flex-shrink:0}}
+    .ic-badge{{font-size:10px;letter-spacing:.8px;text-transform:uppercase;font-weight:400;padding:2px 6px;border-radius:2px;flex-shrink:0}}
+    .b-s{{background:#EAF5EE;color:#1B6F4A}}.b-m{{background:#FEF5E7;color:#c8b487}}.b-w{{background:#F3F3F3;color:#999}}
 
     /* RISK LADDER */
     .risk-ladder{{display:flex;flex-direction:column;gap:0}}
-    .rl-row{{display:flex;align-items:stretch;border:1px solid #E2E0DC;border-bottom:none;background:#fff}}
-    .rl-row:last-child{{border-bottom:1px solid #E2E0DC}}
+    .rl-row{{display:flex;align-items:stretch;border:1px solid #241f18;border-bottom:none;background:#fff}}
+    .rl-row:last-child{{border-bottom:1px solid #241f18}}
     .rl-row:hover{{background:#F9F8F6}}
-    .rl-num{{width:48px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:'Playfair Display',serif;font-size:20px;font-weight:700;border-right:1px solid #E2E0DC}}
+    .rl-num{{width:48px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:'Playfair Display',serif;font-size:20px;font-weight:400;border-right:1px solid #241f18}}
     .l1{{color:#1B6F4A;background:#EAF5EE}}.l2{{color:#2A6F5A;background:#E5F3EE}}.l3{{color:#3A6F4A;background:#EBF5EC}}
-    .l4{{color:#B8943F;background:#FEF8EC}}.l5{{color:#B8943F;background:#FDF5E4}}.l6{{color:#8B6914;background:#FDF0D0}}
-    .l7{{color:#2563EB;background:#EFF6FF}}.l8{{color:#9333EA;background:#F5F3FF}}
+    .l4{{color:#c8b487;background:#FEF8EC}}.l5{{color:#c8b487;background:#FDF5E4}}.l6{{color:#8B6914;background:#FDF0D0}}
+    .l7{{color:#5f7480;background:#EFF6FF}}.l8{{color:#9333EA;background:#F5F3FF}}
     .l9{{color:#DC2626;background:#FEF2F2}}.l10{{color:#1B2A4A;background:#EFF2F8}}
     .rl-body{{flex:1;padding:12px 16px}}
-    .rl-name{{font-size:13px;font-weight:700;color:#1A1A1A;margin-bottom:1px}}
+    .rl-name{{font-size:13px;font-weight:400;color:#1A1A1A;margin-bottom:1px}}
     .rl-step{{font-size:10px;color:#BBB;margin-bottom:3px}}
     .rl-desc{{font-size:11.5px;color:#666;line-height:1.5}}
-    .rl-rule{{flex-shrink:0;width:170px;padding:12px 14px;border-left:1px solid #E2E0DC;display:flex;flex-direction:column;justify-content:center}}
-    .rl-rule-label{{font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:#BBB;font-weight:600;margin-bottom:2px}}
-    .rl-rule-val{{font-size:12px;color:#334155;font-weight:600;line-height:1.4}}
+    .rl-rule{{flex-shrink:0;width:170px;padding:12px 14px;border-left:1px solid #241f18;display:flex;flex-direction:column;justify-content:center}}
+    .rl-rule-label{{font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:#BBB;font-weight:400;margin-bottom:2px}}
+    .rl-rule-val{{font-size:12px;color:#334155;font-weight:400;line-height:1.4}}
 
     /* FACTOR */
     .fac-grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}
-    .fac{{background:#fff;border:1px solid #E2E0DC;padding:18px 20px}}
-    .fac-name{{font-size:13px;font-weight:600;color:#1A1A1A;margin-bottom:4px}}
-    .fac-ic{{font-family:'Playfair Display',serif;font-size:26px;font-weight:700;line-height:1;margin-bottom:5px}}
+    .fac{{background:#fff;border:1px solid #241f18;padding:18px 20px}}
+    .fac-name{{font-size:13px;font-weight:400;color:#1A1A1A;margin-bottom:4px}}
+    .fac-ic{{font-family:'Playfair Display',serif;font-size:26px;font-weight:400;line-height:1;margin-bottom:5px}}
     .fac-sub{{font-size:11.5px;color:#999;line-height:1.45}}
-    .fac-regimes{{display:flex;gap:14px;margin-top:10px;padding-top:8px;border-top:1px solid #F0EFEC}}
+    .fac-regimes{{display:flex;gap:14px;margin-top:10px;padding-top:8px;border-top:1px solid #241f18}}
     .fac-reg{{font-size:11px;text-align:center}}
     .fac-reg-label{{color:#BBB;letter-spacing:.5px;text-transform:uppercase;font-size:9px}}
-    .fac-reg-val{{font-weight:700;margin-top:2px;font-size:12px}}
+    .fac-reg-val{{font-weight:400;margin-top:2px;font-size:12px}}
     .bull{{color:#1B6F4A}}.bear{{color:#B83232}}
 
     /* MACRO */
     .macro-grid{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:16px}}
-    .mac-card{{background:#fff;border:1px solid #E2E0DC;padding:18px 20px}}
-    .mac-ticker{{font-size:17px;font-weight:700;color:#1B2A4A;font-family:'Playfair Display',serif}}
+    .mac-card{{background:#fff;border:1px solid #241f18;padding:18px 20px}}
+    .mac-ticker{{font-size:17px;font-weight:400;color:#1B2A4A;font-family:'Playfair Display',serif}}
     .mac-name{{font-size:11px;color:#999;margin-top:2px;margin-bottom:10px}}
     .mac-role{{font-size:11.5px;color:#555;line-height:1.45}}
-    .mac-status{{margin-top:10px;padding-top:8px;border-top:1px solid #F0EFEC;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase}}
-    .risk-on{{color:#1B6F4A}}.neutral{{color:#B8943F}}.risk-off{{color:#B83232}}
+    .mac-status{{margin-top:10px;padding-top:8px;border-top:1px solid #241f18;font-size:11px;font-weight:400;letter-spacing:.8px;text-transform:uppercase}}
+    .risk-on{{color:#1B6F4A}}.neutral{{color:#c8b487}}.risk-off{{color:#B83232}}
 
     /* REGIME */
     .reg-grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:24px}}
-    .reg-card{{background:#fff;border:1px solid #E2E0DC;padding:26px}}
-    .reg-name{{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:600;margin-bottom:5px}}
-    .reg-pct{{font-family:'Playfair Display',serif;font-size:44px;font-weight:700;line-height:1;margin:6px 0}}
-    .reg-info{{margin-top:12px;padding-top:10px;border-top:1px solid #ECEAE6;font-size:12.5px;color:#555;line-height:1.7}}
+    .reg-card{{background:#fff;border:1px solid #241f18;padding:26px}}
+    .reg-name{{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:400;margin-bottom:5px}}
+    .reg-pct{{font-family:'Playfair Display',serif;font-size:44px;font-weight:400;line-height:1;margin:6px 0}}
+    .reg-info{{margin-top:12px;padding-top:10px;border-top:1px solid #241f18;font-size:12.5px;color:#555;line-height:1.7}}
 
     /* METHOD */
     .method-grid{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}}
-    .method-card{{background:#fff;border:1px solid #E2E0DC;padding:18px 20px;border-top:3px solid #1B2A4A}}
-    .method-card.acc{{border-top-color:#B8943F}}
-    .method-title{{font-size:13px;font-weight:700;color:#1A1A1A;margin-bottom:5px}}
+    .method-card{{background:#fff;border:1px solid #241f18;padding:18px 20px;border-top:3px solid #1B2A4A}}
+    .method-card.acc{{border-top-color:#c8b487}}
+    .method-title{{font-size:13px;font-weight:400;color:#1A1A1A;margin-bottom:5px}}
     .method-body{{font-size:11.5px;color:#666;line-height:1.6}}
-    .method-hl{{font-size:11px;font-weight:700;color:#1B2A4A;margin-top:8px;padding-top:6px;border-top:1px solid #F0EFEC}}
+    .method-hl{{font-size:11px;font-weight:400;color:#1B2A4A;margin-top:8px;padding-top:6px;border-top:1px solid #241f18}}
 
     /* OOS ALERT */
-    .oos-banner{{background:#F0F4F9;border:1px solid #C7D2E0;border-left:4px solid #1B2A4A;padding:16px 22px;margin-bottom:28px}}
-    .oos-banner-title{{font-size:12px;font-weight:700;color:#1B2A4A;margin-bottom:4px;letter-spacing:.5px;text-transform:uppercase}}
+    .oos-banner{{background:#F0F4F9;border:1px solid #283038;border-left:4px solid #1B2A4A;padding:16px 22px;margin-bottom:28px}}
+    .oos-banner-title{{font-size:12px;font-weight:400;color:#1B2A4A;margin-bottom:4px;letter-spacing:.5px;text-transform:uppercase}}
     .oos-banner-body{{font-size:13px;color:#374151;line-height:1.6}}
     .oos-kpi-row{{display:flex;gap:32px;flex-wrap:wrap;margin-top:12px}}
-    .oos-kpi label{{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:#6B7280;font-weight:600;display:block;margin-bottom:2px}}
-    .oos-kpi-val{{font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1B2A4A}}
+    .oos-kpi label{{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:#6B7280;font-weight:400;display:block;margin-bottom:2px}}
+    .oos-kpi-val{{font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1B2A4A}}
     .oos-kpi-val.g{{color:#1B6F4A}}
 
     /* BUDGET */
     .budget-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}}
-    .bud{{background:#fff;border:1px solid #E2E0DC;padding:18px 20px}}
-    .bud-label{{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:600;margin-bottom:6px}}
-    .bud-val{{font-family:'Playfair Display',serif;font-size:28px;font-weight:700;color:#1B2A4A;line-height:1;margin-bottom:4px}}
+    .bud{{background:#fff;border:1px solid #241f18;padding:18px 20px}}
+    .bud-label{{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:400;margin-bottom:6px}}
+    .bud-val{{font-family:'Playfair Display',serif;font-size:28px;font-weight:400;color:#1B2A4A;line-height:1;margin-bottom:4px}}
     .bud-note{{font-size:11px;color:#888;line-height:1.4}}
-    .bud-trigger{{font-size:11px;color:#B83232;font-weight:600;margin-top:6px}}
+    .bud-trigger{{font-size:11px;color:#B83232;font-weight:400;margin-top:6px}}
 
     /* NEWS */
     .news-grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}}
-    .news-card{{background:#fff;border:1px solid #E2E0DC;padding:18px 20px;border-left:4px solid #E2E0DC}}
-    .news-card.pos{{border-left-color:#1B6F4A}}.news-card.neg{{border-left-color:#B83232}}.news-card.neu{{border-left-color:#B8943F}}
-    .news-ticker{{font-size:11px;font-weight:700;color:#1B2A4A;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px}}
-    .news-title{{font-size:13.5px;font-weight:600;color:#1A1A1A;line-height:1.45;margin-bottom:6px}}
+    .news-card{{background:#fff;border:1px solid #241f18;padding:18px 20px;border-left:4px solid #241f18}}
+    .news-card.pos{{border-left-color:#1B6F4A}}.news-card.neg{{border-left-color:#B83232}}.news-card.neu{{border-left-color:#c8b487}}
+    .news-ticker{{font-size:11px;font-weight:400;color:#1B2A4A;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px}}
+    .news-title{{font-size:13.5px;font-weight:400;color:#1A1A1A;line-height:1.45;margin-bottom:6px}}
     .news-summary{{font-size:12px;color:#666;line-height:1.55;margin-bottom:8px}}
     .news-meta{{font-size:11px;color:#999}}
-    .news-logic{{font-size:12px;color:#555;background:#F7F6F3;border-radius:3px;padding:8px 10px;margin-top:8px;line-height:1.5}}
-    .news-action{{font-size:11.5px;font-weight:600;color:#1B2A4A;margin-top:6px;padding-top:6px;border-top:1px solid #F0EFEC}}
-    .news-tone{{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:2px 7px;border-radius:3px;margin-bottom:6px}}
+    .news-logic{{font-size:12px;color:#555;background:#241f18;border-radius:3px;padding:8px 10px;margin-top:8px;line-height:1.5}}
+    .news-action{{font-size:11.5px;font-weight:400;color:#1B2A4A;margin-top:6px;padding-top:6px;border-top:1px solid #241f18}}
+    .news-tone{{display:inline-block;font-size:10px;font-weight:400;letter-spacing:.5px;text-transform:uppercase;padding:2px 7px;border-radius:3px;margin-bottom:6px}}
     /* CALENDAR */
     .cal-grid{{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-top:16px}}
-    .cal-card{{background:#fff;border:1px solid #E2E0DC;padding:16px}}
-    .cal-date{{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#999;margin-bottom:4px;font-weight:600}}
-    .cal-ticker{{font-family:'Playfair Display',serif;font-size:24px;font-weight:700;color:#1B2A4A;line-height:1;margin-bottom:4px}}
+    .cal-card{{background:#fff;border:1px solid #241f18;padding:16px}}
+    .cal-date{{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#999;margin-bottom:4px;font-weight:400}}
+    .cal-ticker{{font-family:'Playfair Display',serif;font-size:24px;font-weight:400;color:#1B2A4A;line-height:1;margin-bottom:4px}}
     .cal-days{{font-size:12px;color:#555;margin-bottom:6px}}
-    .cal-action{{font-size:12px;font-weight:600;color:#1B2A4A;margin-top:8px;padding-top:6px;border-top:1px solid #F0EFEC}}
-    .cal-risk{{font-size:10px;letter-spacing:.5px;text-transform:uppercase;font-weight:700;padding:2px 7px;border-radius:3px;display:inline-block;margin-top:4px}}
-    .cal-risk.high{{background:#FDECEA;color:#B83232}}.cal-risk.low{{background:#E8F5E9;color:#1B6F4A}}
+    .cal-action{{font-size:12px;font-weight:400;color:#1B2A4A;margin-top:8px;padding-top:6px;border-top:1px solid #241f18}}
+    .cal-risk{{font-size:10px;letter-spacing:.5px;text-transform:uppercase;font-weight:400;padding:2px 7px;border-radius:3px;display:inline-block;margin-top:4px}}
+    .cal-risk.high{{background:#FDECEA;color:#B83232}}.cal-risk.low{{background:#241f18;color:#1B6F4A}}
     /* BREADTH */
     .breadth-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:16px}}
-    .breadth-card{{background:#fff;border:1px solid #E2E0DC;padding:16px 18px}}
-    .breadth-ticker{{font-size:13px;font-weight:700;color:#1B2A4A;margin-bottom:2px}}
+    .breadth-card{{background:#fff;border:1px solid #241f18;padding:16px 18px}}
+    .breadth-ticker{{font-size:13px;font-weight:400;color:#1B2A4A;margin-bottom:2px}}
     .breadth-name{{font-size:11px;color:#999;margin-bottom:8px}}
-    .breadth-val{{font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;line-height:1;margin-bottom:4px}}
-    .breadth-badge{{font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:2px 7px;border-radius:3px;display:inline-block}}
-    .breadth-badge.up{{background:#E8F5E9;color:#1B6F4A}}.breadth-badge.dn{{background:#FDECEA;color:#B83232}}.breadth-badge.neu{{background:#FEF9EC;color:#B8943F}}
+    .breadth-val{{font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;line-height:1;margin-bottom:4px}}
+    .breadth-badge{{font-size:10px;font-weight:400;letter-spacing:.5px;text-transform:uppercase;padding:2px 7px;border-radius:3px;display:inline-block}}
+    .breadth-badge.up{{background:#241f18;color:#1B6F4A}}.breadth-badge.dn{{background:#FDECEA;color:#B83232}}.breadth-badge.neu{{background:#FEF9EC;color:#c8b487}}
     /* SECTOR ROTATION */
     .rot-grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}}
-    .rot-card{{background:#fff;border:1px solid #E2E0DC;padding:14px 16px;display:flex;align-items:center;gap:14px}}
-    .rot-etf{{font-family:'Playfair Display',serif;font-size:20px;font-weight:700;color:#1B2A4A;min-width:52px}}
+    .rot-card{{background:#fff;border:1px solid #241f18;padding:14px 16px;display:flex;align-items:center;gap:14px}}
+    .rot-etf{{font-family:'Playfair Display',serif;font-size:20px;font-weight:400;color:#1B2A4A;min-width:52px}}
     .rot-body{{flex:1}}
     .rot-theme{{font-size:11px;color:#999;margin-bottom:3px}}
     .rot-rets{{font-size:12px;color:#555}}
-    .rot-badge{{font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:3px;display:inline-block;margin-top:4px}}
-    .rot-badge.leader{{background:#E8F5E9;color:#1B6F4A}}.rot-badge.neu{{background:#FEF9EC;color:#B8943F}}.rot-badge.lag{{background:#FDECEA;color:#B83232}}
+    .rot-badge{{font-size:10px;font-weight:400;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:3px;display:inline-block;margin-top:4px}}
+    .rot-badge.leader{{background:#241f18;color:#1B6F4A}}.rot-badge.neu{{background:#FEF9EC;color:#c8b487}}.rot-badge.lag{{background:#FDECEA;color:#B83232}}
     /* AUTO-REFRESH */
-    .refresh-bar{{background:#F0F4F9;border:1px solid #C7D2E0;border-radius:4px;padding:8px 16px;font-size:12px;color:#6B7280;display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}}
+    .refresh-bar{{background:#F0F4F9;border:1px solid #283038;border-radius:4px;padding:8px 16px;font-size:12px;color:#6B7280;display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}}
     .refresh-bar strong{{color:#1B2A4A}}
 
     /* POSITION HEALTH */
     .pos-grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}}
-    .pos-card{{background:#fff;border:1px solid #E2E0DC;padding:18px 20px;border-left:4px solid #E2E0DC}}
+    .pos-card{{background:#fff;border:1px solid #241f18;padding:18px 20px;border-left:4px solid #241f18}}
     .pos-card.long{{border-left-color:#1B6F4A}}.pos-card.short{{border-left-color:#B83232}}
     .pos-header{{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}}
-    .pos-ticker{{font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1B2A4A}}
-    .pos-side{{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:2px 8px;border-radius:3px}}
-    .pos-side.long{{background:#E8F5E9;color:#1B6F4A}}.pos-side.short{{background:#FDECEA;color:#B83232}}
-    .pos-prices{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;padding:10px 0;border-top:1px solid #F7F6F3;border-bottom:1px solid #F7F6F3;margin-bottom:10px}}
-    .pos-price-item label{{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:#BBB;display:block;margin-bottom:2px;font-weight:600}}
-    .pos-price-val{{font-family:'Playfair Display',serif;font-size:16px;font-weight:700;color:#1A1A1A}}
+    .pos-ticker{{font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1B2A4A}}
+    .pos-side{{font-size:10px;font-weight:400;letter-spacing:1px;text-transform:uppercase;padding:2px 8px;border-radius:3px}}
+    .pos-side.long{{background:#241f18;color:#1B6F4A}}.pos-side.short{{background:#FDECEA;color:#B83232}}
+    .pos-prices{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;padding:10px 0;border-top:1px solid #241f18;border-bottom:1px solid #241f18;margin-bottom:10px}}
+    .pos-price-item label{{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:#BBB;display:block;margin-bottom:2px;font-weight:400}}
+    .pos-price-val{{font-family:'Playfair Display',serif;font-size:16px;font-weight:400;color:#1A1A1A}}
     .pos-signals{{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px}}
-    .pos-badge{{font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:3px;display:inline-block}}
-    .pos-badge.good{{background:#E8F5E9;color:#1B6F4A}}.pos-badge.bad{{background:#FDECEA;color:#B83232}}.pos-badge.neu{{background:#F7F6F3;color:#666}}
-    .pos-aligned{{font-size:11.5px;font-weight:600;margin-bottom:4px}}
+    .pos-badge{{font-size:10px;font-weight:400;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:3px;display:inline-block}}
+    .pos-badge.good{{background:#241f18;color:#1B6F4A}}.pos-badge.bad{{background:#FDECEA;color:#B83232}}.pos-badge.neu{{background:#241f18;color:#666}}
+    .pos-aligned{{font-size:11.5px;font-weight:400;margin-bottom:4px}}
     .pos-aligned.yes{{color:#1B6F4A}}.pos-aligned.no{{color:#B83232}}.pos-aligned.unk{{color:#999}}
-    .pos-risk{{font-size:12px;color:#555;padding:8px 10px;background:#F7F6F3;border-radius:3px;margin-top:6px;line-height:1.45}}
-    .pos-stale{{font-size:10px;color:#B8943F;font-style:italic;margin-top:4px}}
+    .pos-risk{{font-size:12px;color:#555;padding:8px 10px;background:#241f18;border-radius:3px;margin-top:6px;line-height:1.45}}
+    .pos-stale{{font-size:10px;color:#c8b487;font-style:italic;margin-top:4px}}
     /* CROWDING */
     .crowd-kpi-row{{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px}}
-    .crowd-kpi{{background:#fff;border:1px solid #E2E0DC;padding:18px;border-left:4px solid #E2E0DC}}
-    .crowd-kpi.warn{{border-left-color:#B8943F}}.crowd-kpi.bad{{border-left-color:#B83232}}.crowd-kpi.good{{border-left-color:#1B6F4A}}
-    .crowd-label{{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:#999;font-weight:600;margin-bottom:4px}}
-    .crowd-val{{font-family:'Playfair Display',serif;font-size:26px;font-weight:700;line-height:1;margin-bottom:3px}}
+    .crowd-kpi{{background:#fff;border:1px solid #241f18;padding:18px;border-left:4px solid #241f18}}
+    .crowd-kpi.warn{{border-left-color:#c8b487}}.crowd-kpi.bad{{border-left-color:#B83232}}.crowd-kpi.good{{border-left-color:#1B6F4A}}
+    .crowd-label{{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:#999;font-weight:400;margin-bottom:4px}}
+    .crowd-val{{font-family:'Playfair Display',serif;font-size:26px;font-weight:400;line-height:1;margin-bottom:3px}}
     .crowd-note{{font-size:11.5px;color:#888;line-height:1.4}}
 
     /* ATTRIBUTION */
     .attr-kpi-row{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:28px}}
-    .attr-kpi{{background:#fff;border:1px solid #E2E0DC;padding:20px 22px}}
-    .attr-kpi-label{{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:600;margin-bottom:6px}}
-    .attr-kpi-val{{font-family:'Playfair Display',serif;font-size:30px;font-weight:700;color:#1B2A4A;line-height:1;margin-bottom:4px}}
+    .attr-kpi{{background:#fff;border:1px solid #241f18;padding:20px 22px}}
+    .attr-kpi-label{{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;font-weight:400;margin-bottom:6px}}
+    .attr-kpi-val{{font-family:'Playfair Display',serif;font-size:30px;font-weight:400;color:#1B2A4A;line-height:1;margin-bottom:4px}}
     .attr-kpi-sub{{font-size:11.5px;color:#888}}
     .ff5-grid{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:16px}}
-    .ff5-card{{background:#fff;border:1px solid #E2E0DC;padding:20px}}
-    .ff5-window{{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#999;font-weight:600;margin-bottom:4px}}
-    .ff5-alpha{{font-family:'Playfair Display',serif;font-size:28px;font-weight:700;line-height:1;margin-bottom:4px}}
-    .ff5-ir{{font-size:13px;font-weight:600;color:#555;margin-bottom:12px}}
-    .ff5-factors{{font-size:11.5px;color:#555;line-height:1.7;padding-top:10px;border-top:1px solid #F0EFEC}}
+    .ff5-card{{background:#fff;border:1px solid #241f18;padding:20px}}
+    .ff5-window{{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#999;font-weight:400;margin-bottom:4px}}
+    .ff5-alpha{{font-family:'Playfair Display',serif;font-size:28px;font-weight:400;line-height:1;margin-bottom:4px}}
+    .ff5-ir{{font-size:13px;font-weight:400;color:#555;margin-bottom:12px}}
+    .ff5-factors{{font-size:11.5px;color:#555;line-height:1.7;padding-top:10px;border-top:1px solid #241f18}}
     .ff5-factor-row{{display:flex;justify-content:space-between;margin-bottom:2px}}
-    .sig-bar-row{{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #F7F6F3}}
+    .sig-bar-row{{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #241f18}}
     .sig-bar-row:last-child{{border-bottom:none}}
     .sig-name{{font-size:12.5px;color:#333;min-width:180px}}
-    .sig-bar-wrap{{flex:1;background:#F0EFEC;border-radius:2px;height:8px;overflow:hidden}}
+    .sig-bar-wrap{{flex:1;background:#241f18;border-radius:2px;height:8px;overflow:hidden}}
     .sig-bar{{height:8px;border-radius:2px;background:#1B2A4A}}
-    .sig-pct{{font-size:11px;font-weight:700;color:#1B2A4A;min-width:45px;text-align:right}}
-    .sig-pnl{{font-size:11.5px;font-weight:600;min-width:55px;text-align:right}}
-    .rolling-ic-status{{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:3px}}
-    .rolling-ic-status.ok{{background:#E8F5E9;color:#1B6F4A}}
-    .rolling-ic-status.warn{{background:#FEF9EC;color:#B8943F}}
+    .sig-pct{{font-size:11px;font-weight:400;color:#1B2A4A;min-width:45px;text-align:right}}
+    .sig-pnl{{font-size:11.5px;font-weight:400;min-width:55px;text-align:right}}
+    .rolling-ic-status{{display:inline-block;font-size:10px;font-weight:400;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:3px}}
+    .rolling-ic-status.ok{{background:#241f18;color:#1B6F4A}}
+    .rolling-ic-status.warn{{background:#FEF9EC;color:#c8b487}}
     .rolling-ic-status.alert{{background:#FDECEA;color:#B83232}}
     .tearsheet-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:16px}}
-    .ts-card{{background:#fff;border:1px solid #E2E0DC;padding:18px 20px;border-top:3px solid #1B2A4A}}
-    .ts-card.good{{border-top-color:#1B6F4A}}.ts-card.warn{{border-top-color:#B8943F}}.ts-card.bad{{border-top-color:#B83232}}
-    .ts-metric{{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:#999;font-weight:600;margin-bottom:4px}}
-    .ts-val{{font-family:'Playfair Display',serif;font-size:26px;font-weight:700;color:#1A1A1A;line-height:1;margin-bottom:4px}}
+    .ts-card{{background:#fff;border:1px solid #241f18;padding:18px 20px;border-top:3px solid #1B2A4A}}
+    .ts-card.good{{border-top-color:#1B6F4A}}.ts-card.warn{{border-top-color:#c8b487}}.ts-card.bad{{border-top-color:#B83232}}
+    .ts-metric{{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:#999;font-weight:400;margin-bottom:4px}}
+    .ts-val{{font-family:'Playfair Display',serif;font-size:26px;font-weight:400;color:#1A1A1A;line-height:1;margin-bottom:4px}}
     .ts-bench{{font-size:11.5px;color:#888}}
-    .ts-assess{{font-size:11px;font-weight:700;margin-top:6px;padding-top:6px;border-top:1px solid #F0EFEC}}
-    .ts-assess.good{{color:#1B6F4A}}.ts-assess.warn{{color:#B8943F}}.ts-assess.bad{{color:#B83232}}
+    .ts-assess{{font-size:11px;font-weight:400;margin-top:6px;padding-top:6px;border-top:1px solid #241f18}}
+    .ts-assess.good{{color:#1B6F4A}}.ts-assess.warn{{color:#c8b487}}.ts-assess.bad{{color:#B83232}}
 
     /* DAILY SUMMARY */
-    .daily-summary{{background:#fff;border:1px solid #E2E0DC;border-left:4px solid #1B2A4A;padding:18px 22px;margin-bottom:28px}}
+    .daily-summary{{background:#fff;border:1px solid #241f18;border-left:4px solid #1B2A4A;padding:18px 22px;margin-bottom:28px}}
     .daily-summary-text{{font-size:15px;color:#333;line-height:1.7;margin-top:6px}}
     /* NEWS POSITION BADGE */
-    .news-pos-badge{{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:3px;margin-bottom:6px}}
-    .news-pos-badge.in-long{{background:#E8F5E9;color:#1B6F4A}}
+    .news-pos-badge{{display:inline-block;font-size:10px;font-weight:400;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:3px;margin-bottom:6px}}
+    .news-pos-badge.in-long{{background:#241f18;color:#1B6F4A}}
     .news-pos-badge.in-short{{background:#FDECEA;color:#B83232}}
     /* CLICKABLE TICKERS */
     .td-ticker{{cursor:pointer}}
-    .td-ticker:hover{{color:#B8943F!important;text-decoration:underline}}
+    .td-ticker:hover{{color:#c8b487!important;text-decoration:underline}}
     /* DRILLDOWN MODAL */
     #drilldown-modal{{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.48);z-index:9000;overflow-y:auto;-webkit-overflow-scrolling:touch}}
-    .dd-box{{max-width:700px;margin:52px auto 40px;background:#FAFAF8;border:1px solid #E2E0DC;position:relative;padding:36px}}
+    .dd-box{{max-width:700px;margin:52px auto 40px;background:#FAFAF8;border:1px solid #241f18;position:relative;padding:36px}}
     .dd-close{{position:absolute;top:14px;right:18px;background:none;border:none;font-size:24px;cursor:pointer;color:#AAA;line-height:1}}
     .dd-close:hover{{color:#1A1A1A}}
-    .dd-ticker{{font-family:'Playfair Display',serif;font-size:36px;font-weight:700;color:#1B2A4A;line-height:1;margin-bottom:4px}}
+    .dd-ticker{{font-family:'Playfair Display',serif;font-size:36px;font-weight:400;color:#1B2A4A;line-height:1;margin-bottom:4px}}
     .dd-meta{{font-size:12px;color:#999;margin-bottom:20px}}
     .dd-kpi-row{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:22px}}
-    .dd-kpi{{background:#fff;border:1px solid #E2E0DC;padding:14px;text-align:center}}
-    .dd-kpi-label{{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#999;font-weight:600;margin-bottom:4px}}
-    .dd-kpi-val{{font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1B2A4A}}
-    .dd-section-title{{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#B8943F;font-weight:600;margin:18px 0 10px}}
-    .dd-sig-row{{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #F7F6F3}}
+    .dd-kpi{{background:#fff;border:1px solid #241f18;padding:14px;text-align:center}}
+    .dd-kpi-label{{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#999;font-weight:400;margin-bottom:4px}}
+    .dd-kpi-val{{font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1B2A4A}}
+    .dd-section-title{{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#c8b487;font-weight:400;margin:18px 0 10px}}
+    .dd-sig-row{{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #241f18}}
     .dd-sig-name{{font-size:12px;color:#555;min-width:150px}}
-    .dd-sig-bar-wrap{{flex:1;background:#F0EFEC;border-radius:2px;height:8px;overflow:hidden}}
+    .dd-sig-bar-wrap{{flex:1;background:#241f18;border-radius:2px;height:8px;overflow:hidden}}
     .dd-sig-bar{{height:8px;border-radius:2px;transition:width .3s}}
-    .dd-sig-val{{font-size:11px;font-weight:700;color:#1B2A4A;min-width:36px;text-align:right}}
-    .dd-news-item{{padding:8px 0;border-bottom:1px solid #F7F6F3;font-size:12.5px}}
-    .dd-news-title{{color:#1A1A1A;font-weight:600;margin-bottom:2px;line-height:1.4}}
+    .dd-sig-val{{font-size:11px;font-weight:400;color:#1B2A4A;min-width:36px;text-align:right}}
+    .dd-news-item{{padding:8px 0;border-bottom:1px solid #241f18;font-size:12.5px}}
+    .dd-news-title{{color:#1A1A1A;font-weight:400;margin-bottom:2px;line-height:1.4}}
     .dd-news-meta{{font-size:11px;color:#BBB}}
     /* MOBILE */
     @media(max-width:768px){{
@@ -7939,16 +8835,16 @@ def build_html(daily: dict, chart: dict, summ: dict,
     @media(max-width:768px){{
       .mobile-bottom-nav{{
         display:flex;position:fixed;bottom:0;left:0;right:0;z-index:999;
-        background:#0D1B35;border-top:1px solid rgba(255,255,255,.12);
+        background:#231a12;border-top:1px solid rgba(255,255,255,.12);
         padding:0 0 env(safe-area-inset-bottom);
       }}
       .mobile-bottom-nav a{{
         flex:1;display:flex;flex-direction:column;align-items:center;
         padding:8px 4px;color:rgba(255,255,255,.45);text-decoration:none;
-        font-size:9px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;
+        font-size:9px;font-weight:400;letter-spacing:.5px;text-transform:uppercase;
         cursor:pointer;border:none;background:none;gap:3px;
       }}
-      .mobile-bottom-nav a.active{{color:#B8943F}}
+      .mobile-bottom-nav a.active{{color:#c8b487}}
       .mobile-bottom-nav a .bnav-icon{{font-size:18px;line-height:1}}
       /* Push page content above bottom nav */
       body{{padding-bottom:64px}}
@@ -7961,47 +8857,74 @@ def build_html(daily: dict, chart: dict, summ: dict,
       body{{font-size:11px}}
     }}
     /* FOOTER */
-    footer{{background:#080808;color:rgba(255,255,255,.38);padding:44px 0;font-size:12px;line-height:1.75;margin-top:0}}
+    footer{{background:#120f0b;color:rgba(255,255,255,.38);padding:44px 0;font-size:12px;line-height:1.75;margin-top:0}}
     footer strong{{color:rgba(255,255,255,.72)}}
-    .footer-brand{{font-family:'Playfair Display',serif;font-size:20px;color:#fff;font-weight:700;margin-bottom:8px}}
-    .footer-brand span{{color:#B8943F}}
+    .footer-brand{{font-family:'Playfair Display',serif;font-size:20px;color:#fff;font-weight:400;margin-bottom:8px}}
+    .footer-brand span{{color:#c8b487}}
     .footer-inner{{display:grid;grid-template-columns:1fr 1.8fr;gap:60px;align-items:start}}
 
     /* UTILS */
     .mt16{{margin-top:16px}}.mt24{{margin-top:24px}}.mt36{{margin-top:36px}}.mt48{{margin-top:48px}}
     .stress-grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}
-    .stress-card{{background:#fff;border:1px solid #E2E0DC;padding:18px 20px;border-left:4px solid #E2E0DC}}
-    .stress-card.bad{{border-left-color:#B83232}}.stress-card.ok{{border-left-color:#B8943F}}.stress-card.good{{border-left-color:#1B6F4A}}
-    .stress-name{{font-size:13px;font-weight:700;color:#1A1A1A;margin-bottom:3px}}
+    .stress-card{{background:#fff;border:1px solid #241f18;padding:18px 20px;border-left:4px solid #241f18}}
+    .stress-card.bad{{border-left-color:#B83232}}.stress-card.ok{{border-left-color:#c8b487}}.stress-card.good{{border-left-color:#1B6F4A}}
+    .stress-name{{font-size:13px;font-weight:400;color:#1A1A1A;margin-bottom:3px}}
     .stress-period{{font-size:11px;color:#999;margin-bottom:10px}}
     .stress-metrics{{display:flex;gap:18px}}
     .sm-item label{{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:#BBB;display:block;margin-bottom:2px}}
-    .sm-val{{font-family:'Playfair Display',serif;font-size:18px;font-weight:700}}
-    .sm-val.neg{{color:#B83232}}.sm-val.pos{{color:#1B6F4A}}.sm-val.neu{{color:#B8943F}}
+    .sm-val{{font-family:'Playfair Display',serif;font-size:18px;font-weight:400}}
+    .sm-val.neg{{color:#B83232}}.sm-val.pos{{color:#1B6F4A}}.sm-val.neu{{color:#c8b487}}
     /* ══════════════════════════════════════════════════════
        DARK MODE — cool navy-black canvas, deep-blue + gold kept
-       Palette:  bg #0a0c12 · surface #151a24 · line #29303f
+       Palette:  bg #17130f · surface #16140f · line #3a3128
        ══════════════════════════════════════════════════════ */
-    body{{background:#0a0c12!important;color:#d6d9e0!important}}
+    body{{background:#0d0c0a!important;color:#e8e1d2!important;
+      font-family:'Helvetica Neue','Helvetica','Inter',Arial,sans-serif!important;
+      -webkit-font-smoothing:antialiased;letter-spacing:.005em}}
+    /* FT-style: subtle warm paper grain via radial vignette */
+    body::before{{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+      background:radial-gradient(120% 80% at 50% -10%,rgba(200,180,135,.035),transparent 60%)}}
+    /* FT-style serif display — Scotch/transitional headlines */
+    h1,h2,h3,h4,.section-head,.hero-title,
+    [style*="Playfair Display"],[style*="Financier Display"]{{font-family:'Baskerville','Hoefler Text','Iowan Old Style','Georgia',serif!important;
+      letter-spacing:.005em;font-feature-settings:'liga' 1,'kern' 1}}
+    .section-head{{font-weight:400!important;letter-spacing:-.02em!important}}
+    .eyebrow{{text-transform:uppercase;letter-spacing:.16em!important;font-size:11px!important;
+      font-weight:400!important;color:#c8b487!important}}
+    /* Hairline rules — FT thin salmon underscore */
+    .rule{{height:2px!important;background:#c8b487!important;width:44px!important}}
+    /* Tabular numerals everywhere numbers line up */
+    td,.kpi-val,.today-card-val,.pos-price-val,.crowd-val,.attr-kpi-val,
+    .breadth-val,.ts-val,.sm-val{{font-variant-numeric:tabular-nums}}
+    /* Nav — warm bar, salmon active underline */
+    nav,.nav,header{{background:#16140f!important;border-bottom:1px solid #3a3128!important}}
+    .nav-brand span{{color:#c8b487!important}}
+    .nav-tabs a.active,.nav-group.active .nav-group-btn{{border-bottom-color:#c8b487!important;color:#f4ecdf!important}}
+    .nav-tabs a:hover,.nav-group-btn:hover{{color:#f4ecdf!important;background:rgba(200,180,135,.05)!important}}
+    /* render-only dynamic colors (f-string generated) */
+    [style*="background:#F0FDF4"],[style*="background:#D5E8D4"]{{background:#1c231e!important}}
+    [style*="background:#FFF7ED"]{{background:#241f16!important}}
+    [style*="background:#FFD7CC"]{{background:#251a17!important}}
+    [style*="background:#243039"]{{background:#1f2321!important}}
 
     /* Elevated card surfaces — cool tint + soft shadow for depth */
     .today-card,.chart-box,.ic-row,.fac,.mac-card,.reg-card,.method-card,
     .news-card,.cal-card,.breadth-card,.rot-card,.pos-card,.crowd-kpi,
     .attr-kpi,.ff5-card,.ts-card,.bud,.rl-row,.dd-kpi,.stress-card,
     .dd-box{{
-      background:#151a24!important;border-color:#29303f!important;
+      background:#16140f!important;border-color:#3a3128!important;
       box-shadow:0 1px 3px rgba(0,0,0,.4)!important}}
 
     /* Specific element borders */
-    .rl-row{{border-color:#29303f!important}}
-    .rl-num{{border-right-color:#29303f!important}}
-    .rl-rule{{border-left-color:#29303f!important}}
+    .rl-row{{border-color:#3a3128!important}}
+    .rl-num{{border-right-color:#3a3128!important}}
+    .rl-rule{{border-left-color:#3a3128!important}}
 
     /* Typography — section-level headings */
-    .section-head{{color:#f0f1f4!important}}
-    .lead,.prose{{color:#9aa0ac!important}}
-    .eyebrow{{color:#C9A24B!important}}
-    .rule{{background:#C9A24B!important}}
+    .section-head{{color:#f4ecdf!important}}
+    .lead,.prose{{color:#a89c8c!important}}
+    .eyebrow{{color:#c8b487!important}}
+    .rule{{background:#c8b487!important}}
 
     /* Muted labels across all card types */
     .tbl-title,.today-card-label,.today-card-note,.chart-sub,.news-meta,
@@ -8009,77 +8932,77 @@ def build_html(daily: dict, chart: dict, summ: dict,
     .ff5-window,.ts-metric,.reg-name,.bud-label,.bud-note,.tbl-note,
     .dd-meta,.dd-kpi-label,.stress-period,.rl-step,.td-rank,.ic-step,
     .pos-price-item label,.fac-sub,.fac-reg-label,.pos-stale{{
-      color:#727a89!important}}
+      color:#8a7f70!important}}
 
     /* Body-weight card text — bright */
     .chart-title,.method-title,.news-title,.rl-name,.fac-name,.stress-name,
     .breadth-val,.ts-val,.pos-price-val,.dd-news-title,.today-card-val,
     .kpi-val,.reg-pct,.crowd-val,.attr-kpi-val,.ff5-alpha,.bud-val,
     .fac-ic,.mac-ticker,.cal-ticker,.rot-etf,.pos-ticker,.dd-kpi-val,
-    .dd-ticker,.sm-val{{color:#f0f1f4!important}}
+    .dd-ticker,.sm-val{{color:#f4ecdf!important}}
 
     /* Deep-blue accents brighten slightly so they read on dark */
     .td-ticker,.crowd-val,.attr-kpi-val,.ff5-alpha,.bud-val,.fac-ic,
     .mac-ticker,.cal-ticker,.rot-etf,.pos-ticker,.dd-kpi-val,.dd-ticker,
-    .breadth-ticker,.sig-pct,.oos-kpi-val{{color:#C9A24B!important}}
-    .score-bar,.sig-bar,.dd-sig-bar{{background:#4d6aa8!important}}
+    .breadth-ticker,.sig-pct,.oos-kpi-val{{color:#c8b487!important}}
+    .score-bar,.sig-bar,.dd-sig-bar{{background:#7a6636!important}}
 
     /* Secondary text */
     .method-body,.news-summary,.news-logic,.rl-desc,.mac-role,.reg-info,
     .ff5-ir,.ff5-factors,.crowd-note,.attr-kpi-sub,.ts-bench,.cal-days,
     .rot-rets,.dd-sig-name,.pos-risk,.pos-aligned.unk,.rl-rule-val,
-    .sig-name,.daily-summary-text,.hero-desc{{color:#9aa0ac!important}}
+    .sig-name,.daily-summary-text,.hero-desc{{color:#a89c8c!important}}
 
     /* Tables */
-    thead th{{color:#727a89!important;border-bottom-color:#2f3a52!important}}
-    tbody tr{{border-bottom-color:#20262f!important}}
-    tbody tr:hover{{background:#1b2130!important}}
-    tbody tr:last-child{{border-bottom-color:#2f3a52!important}}
-    tr.tr-strong{{background:#10231a!important}}
+    thead th{{color:#8a7f70!important;border-bottom-color:#453a2c!important}}
+    tbody tr{{border-bottom-color:#2a231b!important}}
+    tbody tr:hover{{background:#2a231b!important}}
+    tbody tr:last-child{{border-bottom-color:#453a2c!important}}
+    tr.tr-strong{{background:#1a271d!important}}
 
     /* Progress / bar track backgrounds */
     .score-bar-wrap,.ic-bar-wrap,.sig-bar-wrap,.dd-sig-bar-wrap{{
-      background:#262d3a!important}}
+      background:#2f2820!important}}
 
     /* Dividers inside cards */
     .fac-regimes,.mac-status,.cal-action,.ts-assess,.method-hl,
     .news-action,.ff5-factors,.dd-sig-row,.pos-prices,
-    .sig-bar-row,.reg-info,.crowd-kpi{{border-color:#262d3a!important}}
-    .pos-prices{{border-top-color:#262d3a!important;border-bottom-color:#262d3a!important}}
+    .sig-bar-row,.reg-info,.crowd-kpi{{border-color:#2f2820!important}}
+    .pos-prices{{border-top-color:#2f2820!important;border-bottom-color:#2f2820!important}}
 
     /* Semantic badge chips — richer dark tints, keep hue */
     .b-s,.rolling-ic-status.ok,.pos-side.long,.pos-badge.good,
     .news-pos-badge.in-long,.cal-risk.low,.breadth-badge.up,.rot-badge.leader{{
-      background:#12291c!important;color:#5fd39a!important}}
+      background:#1c231e!important;color:#8faa9a!important}}
     .b-m,.rolling-ic-status.warn,.breadth-badge.neu,.rot-badge.neu{{
-      background:#2a2109!important;color:#d9b458!important}}
+      background:#241f16!important;color:#c0a878!important}}
     .b-w,.pos-badge.neu{{
-      background:#22293a!important;color:#8b93a3!important}}
+      background:#2a231b!important;color:#9a8e80!important}}
     .pos-side.short,.pos-badge.bad,.news-pos-badge.in-short,.cal-risk.high,
     .breadth-badge.dn,.rot-badge.lag,.rolling-ic-status.alert{{
-      background:#2c1315!important;color:#ec8080!important}}
-    .pos{{color:#5fd39a!important}}
-    .neg{{color:#ec8080!important}}
+      background:#251a17!important;color:#c68b83!important}}
+    .pos{{color:#8faa9a!important}}
+    .neg{{color:#c68b83!important}}
     .kpi-val.g,.ts-assess.good,.attr-kpi-val.g,.oos-kpi-val.g,.sm-val.pos,
-    .pos-aligned.yes,.bull{{color:#5fd39a!important}}
-    .ts-assess.bad,.sm-val.neg,.pos-aligned.no,.bear,.bud-trigger{{color:#ec8080!important}}
-    .ts-assess.warn,.sm-val.neu{{color:#d9b458!important}}
+    .pos-aligned.yes,.bull{{color:#8faa9a!important}}
+    .ts-assess.bad,.sm-val.neg,.pos-aligned.no,.bear,.bud-trigger{{color:#c68b83!important}}
+    .ts-assess.warn,.sm-val.neu{{color:#c0a878!important}}
 
     /* Risk ladder level-number backgrounds */
-    .l1,.l2,.l3{{background:#12291c!important;color:#5fd39a!important}}
-    .l4,.l5,.l6{{background:#2a2109!important;color:#d9b458!important}}
-    .l7{{background:#111d33!important;color:#7ca8f0!important}}
-    .l8{{background:#1e1436!important;color:#c07af0!important}}
-    .l9{{background:#2c1315!important;color:#ec8080!important}}
-    .l10{{background:#131b2e!important;color:#8fa8d8!important}}
+    .l1,.l2,.l3{{background:#1c231e!important;color:#8faa9a!important}}
+    .l4,.l5,.l6{{background:#241f16!important;color:#c0a878!important}}
+    .l7{{background:#1f2321!important;color:#8aa6a6!important}}
+    .l8{{background:#221c26!important;color:#c07af0!important}}
+    .l9{{background:#251a17!important;color:#c68b83!important}}
+    .l10{{background:#1f2321!important;color:#8fa8d8!important}}
 
     /* Cards with colored top/left borders keep hue but on dark surface */
-    .method-card{{border-top-color:#2f3a52!important}}
-    .ts-card{{border-top-color:#2f3a52!important}}
+    .method-card{{border-top-color:#453a2c!important}}
+    .ts-card{{border-top-color:#453a2c!important}}
     .ts-card.good{{border-top-color:#2f7a52!important}}
     .ts-card.warn{{border-top-color:#8a6a20!important}}
     .ts-card.bad{{border-top-color:#8a3232!important}}
-    .news-card,.pos-card,.stress-card,.crowd-kpi{{border-left-color:#29303f!important}}
+    .news-card,.pos-card,.stress-card,.crowd-kpi{{border-left-color:#3a3128!important}}
     .news-card.pos,.pos-card.long,.stress-card.good{{border-left-color:#2f7a52!important}}
     .news-card.neg,.pos-card.short,.stress-card.bad{{border-left-color:#8a3232!important}}
     .news-card.neu,.stress-card.ok{{border-left-color:#8a6a20!important}}
@@ -8089,65 +9012,200 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     /* Navy-tinted info panels */
     .oos-banner,.refresh-bar,.daily-summary{{
-      background:#0f1626!important;border-color:#2f3a52!important}}
-    .oos-banner{{border-left-color:#4d6aa8!important}}
-    .daily-summary{{border-left-color:#4d6aa8!important}}
-    .oos-banner-title{{color:#C9A24B!important}}
-    .oos-banner-body{{color:#9aa0ac!important}}
-    .oos-kpi label{{color:#727a89!important}}
-    .refresh-bar{{color:#9aa0ac!important}}
-    .refresh-bar strong{{color:#C9A24B!important}}
+      background:#16140f!important;border-color:#453a2c!important}}
+    .oos-banner{{border-left-color:#7a6636!important}}
+    .daily-summary{{border-left-color:#7a6636!important}}
+    .oos-banner-title{{color:#c8b487!important}}
+    .oos-banner-body{{color:#a89c8c!important}}
+    .oos-kpi label{{color:#8a7f70!important}}
+    .refresh-bar{{color:#a89c8c!important}}
+    .refresh-bar strong{{color:#c8b487!important}}
 
     /* Drilldown modal */
     #drilldown-modal{{background:rgba(0,0,0,.72)!important}}
-    .dd-box{{background:#151a24!important}}
-    .dd-close{{color:#727a89!important}}
-    .dd-close:hover{{color:#f0f1f4!important}}
-    .dd-news-meta{{color:#727a89!important}}
-    .dd-section-title{{color:#C9A24B!important}}
+    .dd-box{{background:#16140f!important}}
+    .dd-close{{color:#8a7f70!important}}
+    .dd-close:hover{{color:#f4ecdf!important}}
+    .dd-news-meta{{color:#8a7f70!important}}
+    .dd-section-title{{color:#c8b487!important}}
 
     /* Inline-style overrides via attribute selectors */
     [style*="background:#fff"],[style*="background:#FFF"],[style*="background:white"],
-    [style*="background:#F7F6F3"],[style*="background:#F2F1EE"],[style*="background:#F0EDE8"],
-    [style*="background:#F0EFEC"],[style*="background:#F3F4F6"]{{background:#151a24!important}}
-    [style*="background:#FAFAF8"]{{background:#0a0c12!important}}
-    [style*="background:#f0f0f0"],[style*="background:#EEE"]{{background:#262d3a!important}}
+    [style*="background:#241f18"],[style*="background:#241f18"],[style*="background:#241f18"],
+    [style*="background:#241f18"],[style*="background:#F3F4F6"]{{background:#16140f!important}}
+    [style*="background:#FAFAF8"]{{background:#17130f!important}}
+    [style*="background:#241f18"],[style*="background:#EEE"]{{background:#2f2820!important}}
     [style*="background:#F7FCF9"],[style*="background:#EAF5EE"],
-    [style*="background:#E8F5E9"]{{background:#12291c!important}}
+    [style*="background:#241f18"]{{background:#1c231e!important}}
     [style*="background:#FDF8EE"],[style*="background:#FEF8EC"],[style*="background:#fff8e1"],
-    [style*="background:#FEF5E7"],[style*="background:#FEF9EC"]{{background:#2a2109!important}}
+    [style*="background:#FEF5E7"],[style*="background:#FEF9EC"]{{background:#241f16!important}}
     [style*="background:#fff5f5"],[style*="background:#FDECEA"],[style*="background:#FEE2E2"],
-    [style*="background:#FEF2F2"]{{background:#2c1315!important}}
-    [style*="background:#F0F4F9"],[style*="background:#EFF2F8"]{{background:#0f1626!important}}
-    [style*="background:#EFF6FF"],[style*="background:#E3F0FF"]{{background:#111d33!important}}
-    [style*="background:#F5F3FF"]{{background:#1e1436!important}}
+    [style*="background:#FEF2F2"]{{background:#251a17!important}}
+    [style*="background:#F0F4F9"],[style*="background:#EFF2F8"]{{background:#16140f!important}}
+    [style*="background:#EFF6FF"],[style*="background:#202832"]{{background:#1f2321!important}}
+    [style*="background:#F5F3FF"]{{background:#221c26!important}}
+    /* navy #1B2A4A used as box bg / border → warm dark (text already remapped) */
+    [style*="background:#1B2A4A"],[style*="background: #1B2A4A"]{{background:#231a12!important}}
+    [style*="border:1px solid #1B2A4A"],[style*="border-color:#1B2A4A"],
+    [style*="border-left:3px solid #1B2A4A"],[style*="border-left:4px solid #1B2A4A"],
+    [style*="border-bottom:2px solid #1B2A4A"]{{border-color:#453a2c!important}}
     /* second-pass: light-neutral variants that slipped through */
-    [style*="background:#F4F4F4"],[style*="background:#FAFAFA"],[style*="background:#F9F9F9"],
-    [style*="background:#F5F5F5"],[style*="background:#F5F4F0"],[style*="background:#F7F6F2"],
+    [style*="background:#241f18"],[style*="background:#FAFAFA"],[style*="background:#F9F9F9"],
+    [style*="background:#F5F5F5"],[style*="background:#F5F4F0"],[style*="background:#241f18"],
     [style*="background:#FBFBFB"],[style*="background:#FCFCFC"],[style*="background:#EFEFEF"],
-    [style*="background:#F8F8F8"],[style*="background:#F6F5F2"]{{background:#151a24!important}}
-    [style*="background:#FFF3E0"],[style*="background:#FFF8E1"],[style*="background:#FDF6E3"]{{background:#2a2109!important}}
-    [style*="background:#FFEBEE"],[style*="background:#FEF0EF"],[style*="background:#FCE4E4"]{{background:#2c1315!important}}
-    [style*="background:#E3F2FD"],[style*="background:#E8F0FE"]{{background:#111d33!important}}
-    [style*="background:#F3E5F5"],[style*="background:#EDE7F6"]{{background:#1e1436!important}}
-    [style*="background:#E8F5E9"],[style*="background:#E6F4EA"],[style*="background:#E9F7EF"]{{background:#12291c!important}}
-    [style*="color:#1A1A1A"]{{color:#e8eaef!important}}
+    [style*="background:#F8F8F8"],[style*="background:#F6F5F2"]{{background:#16140f!important}}
+    [style*="background:#FFF3E0"],[style*="background:#FFF8E1"],[style*="background:#FDF6E3"]{{background:#241f16!important}}
+    [style*="background:#FFEBEE"],[style*="background:#FEF0EF"],[style*="background:#FCE4E4"]{{background:#251a17!important}}
+    [style*="background:#202832"],[style*="background:#E8F0FE"]{{background:#1f2321!important}}
+    [style*="background:#F3E5F5"],[style*="background:#EDE7F6"]{{background:#221c26!important}}
+    [style*="background:#241f18"],[style*="background:#E6F4EA"],[style*="background:#E9F7EF"]{{background:#1c231e!important}}
+    [style*="color:#1A1A1A"]{{color:#f4ecdf!important}}
     [style*="color:#2D2D2D"]{{color:#c4c8d0!important}}
     [style*="color:#333"]{{color:#aab0bc!important}}
-    [style*="color:#374151"]{{color:#9aa0ac!important}}
+    [style*="color:#374151"]{{color:#a89c8c!important}}
     [style*="color:#555"]{{color:#9198a6!important}}
-    [style*="color:#666"]{{color:#868d9b!important}}
-    [style*="color:#6B7280"]{{color:#727a89!important}}
-    [style*="color:#1B2A4A"]{{color:#C9A24B!important}}
-    [style*="color:#1B6F4A"]{{color:#5fd39a!important}}
-    [style*="color:#B83232"]{{color:#ec8080!important}}
-    [style*="color:#999"]{{color:#727a89!important}}
-    [style*="color:#AAA"],[style*="color:#BBB"],[style*="color:#CCC"]{{color:#5c6474!important}}
-    [style*="border:1px solid #E2E0DC"],[style*="border-color:#E2E0DC"],
-    [style*="border-bottom:1px solid #E2E0DC"]{{border-color:#29303f!important}}
-    [style*="background:#C7D2E0"]{{border-color:#2f3a52!important}}
+    [style*="color:#666"]{{color:#9a8e80!important}}
+    [style*="color:#6B7280"]{{color:#8a7f70!important}}
+    [style*="color:#1B2A4A"]{{color:#c8b487!important}}
+    [style*="color:#1B6F4A"]{{color:#8faa9a!important}}
+    [style*="color:#B83232"]{{color:#c68b83!important}}
+    [style*="color:#e74c3c"],[style*="color:#E74C3C"]{{color:#c68b83!important}}
+    [style*="color:#f39c12"],[style*="color:#F39C12"]{{color:#c0a878!important}}
+    [style*="color:#27ae60"],[style*="color:#2ecc71"],[style*="color:#16a34a"]{{color:#8faa9a!important}}
+    [style*="color:#4ade80"],[style*="color:#22c55e"]{{color:#8faa9a!important}}
+    [style*="color:#f87171"],[style*="color:#ef4444"],[style*="color:#dc2626"]{{color:#c68b83!important}}
+    [style*="color:#facc15"],[style*="color:#eab308"]{{color:#c0a878!important}}
+    [style*="color:#2A7A50"],[style*="color:#2E7D52"]{{color:#8faa9a!important}}
+    [style*="color:#444"]{{color:#a89c8c!important}}
+    [style*="color:#60a5fa"],[style*="color:#3b82f6"],[style*="color:#2563eb"]{{color:#8fa8d8!important}}
+    [style*="color:#ccc"],[style*="color:#CCC"]{{color:#8a7f70!important}}
+    [style*="color:#777"],[style*="color:#888"],[style*="color:#999"]{{color:#8a7f70!important}}
+    [style*="border-top:1px solid #333"],[style*="border:1px solid #333"],[style*="border-bottom:1px solid #333"]{{border-color:#2f281f!important}}
+    [style*="background:#166534"]{{background:#1c231e!important}}
+    [style*="background:#1e3a5f"]{{background:#1f2321!important}}
+    [style*="background:#7f1d1d"]{{background:#251a17!important}}
+    [style*="background:#e74c3c"],[style*="background:#E74C3C"]{{background:#8a4a44!important}}
+    [style*="background:#f39c12"],[style*="background:#F39C12"]{{background:#8a6a3a!important}}
+    [style*="color:#999"]{{color:#8a7f70!important}}
+    [style*="color:#AAA"],[style*="color:#BBB"],[style*="color:#CCC"]{{color:#746a5d!important}}
+    [style*="border:1px solid #241f18"],[style*="border-color:#241f18"],
+    [style*="border-bottom:1px solid #241f18"]{{border-color:#241f18!important}}
+    [style*="background:#283038"]{{border-color:#453a2c!important}}
     /* Grid gap lines (background on grid container) */
-    [style*="background:#E2E0DC"]{{background:#1a2029!important}}
+    [style*="background:#241f18"]{{background:#241d16!important}}
+
+    /* ═══ FT-dark: 自动覆盖所有残留浅色内联样式 ═══ */
+    [style*="background:#283038"],[style*="background: #283038"],[style*="background-color:#283038"]{{background:#1f2321!important}}
+    [style*="background:#CCC"],[style*="background: #CCC"],[style*="background-color:#CCC"]{{background:#16140f!important}}
+    [style*="background:#241f18"],[style*="background: #241f18"],[style*="background-color:#241f18"]{{background:#16140f!important}}
+    [style*="background:#202832"],[style*="background: #202832"],[style*="background-color:#202832"]{{background:#1f2321!important}}
+    [style*="background:#202832"],[style*="background: #202832"],[style*="background-color:#202832"]{{background:#1f2321!important}}
+    [style*="background:#E5F3EE"],[style*="background: #E5F3EE"],[style*="background-color:#E5F3EE"]{{background:#1c231e!important}}
+    [style*="background:#E6F4EA"],[style*="background: #E6F4EA"],[style*="background-color:#E6F4EA"]{{background:#1c231e!important}}
+    [style*="background:#E8F0FE"],[style*="background: #E8F0FE"],[style*="background-color:#E8F0FE"]{{background:#1f2321!important}}
+    [style*="background:#241f18"],[style*="background: #241f18"],[style*="background-color:#241f18"]{{background:#1c231e!important}}
+    [style*="background:#E9F7EF"],[style*="background: #E9F7EF"],[style*="background-color:#E9F7EF"]{{background:#1c231e!important}}
+    [style*="background:#EAF5EE"],[style*="background: #EAF5EE"],[style*="background-color:#EAF5EE"]{{background:#16140f!important}}
+    [style*="background:#EBF5EC"],[style*="background: #EBF5EC"],[style*="background-color:#EBF5EC"]{{background:#16140f!important}}
+    [style*="background:#EDE7F6"],[style*="background: #EDE7F6"],[style*="background-color:#EDE7F6"]{{background:#1f2321!important}}
+    [style*="background:#EEE"],[style*="background: #EEE"],[style*="background-color:#EEE"]{{background:#16140f!important}}
+    [style*="background:#EEF2F8"],[style*="background: #EEF2F8"],[style*="background-color:#EEF2F8"]{{background:#16140f!important}}
+    [style*="background:#EFEFEF"],[style*="background: #EFEFEF"],[style*="background-color:#EFEFEF"]{{background:#16140f!important}}
+    [style*="background:#EFF2F8"],[style*="background: #EFF2F8"],[style*="background-color:#EFF2F8"]{{background:#16140f!important}}
+    [style*="background:#EFF6FF"],[style*="background: #EFF6FF"],[style*="background-color:#EFF6FF"]{{background:#1f2321!important}}
+    [style*="background:#241f18"],[style*="background: #241f18"],[style*="background-color:#241f18"]{{background:#16140f!important}}
+    [style*="background:#241f18"],[style*="background: #241f18"],[style*="background-color:#241f18"]{{background:#16140f!important}}
+    [style*="background:#241f18"],[style*="background: #241f18"],[style*="background-color:#241f18"]{{background:#16140f!important}}
+    [style*="background:#F0F4F9"],[style*="background: #F0F4F9"],[style*="background-color:#F0F4F9"]{{background:#16140f!important}}
+    [style*="background:#F0F8FF"],[style*="background: #F0F8FF"],[style*="background-color:#F0F8FF"]{{background:#1f2321!important}}
+    [style*="background:#F0FAF2"],[style*="background: #F0FAF2"],[style*="background-color:#F0FAF2"]{{background:#16140f!important}}
+    [style*="background:#241f18"],[style*="background: #241f18"],[style*="background-color:#241f18"]{{background:#16140f!important}}
+    [style*="background:#F2FFF2"],[style*="background: #F2FFF2"],[style*="background-color:#F2FFF2"]{{background:#1c231e!important}}
+    [style*="background:#F3E5F5"],[style*="background: #F3E5F5"],[style*="background-color:#F3E5F5"]{{background:#1f2321!important}}
+    [style*="background:#F3F3F3"],[style*="background: #F3F3F3"],[style*="background-color:#F3F3F3"]{{background:#16140f!important}}
+    [style*="background:#F3F4F6"],[style*="background: #F3F4F6"],[style*="background-color:#F3F4F6"]{{background:#16140f!important}}
+    [style*="background:#241f18"],[style*="background: #241f18"],[style*="background-color:#241f18"]{{background:#16140f!important}}
+    [style*="background:#F5F3FF"],[style*="background: #F5F3FF"],[style*="background-color:#F5F3FF"]{{background:#1f2321!important}}
+    [style*="background:#F5F4F0"],[style*="background: #F5F4F0"],[style*="background-color:#F5F4F0"]{{background:#16140f!important}}
+    [style*="background:#F5F5F5"],[style*="background: #F5F5F5"],[style*="background-color:#F5F5F5"]{{background:#16140f!important}}
+    [style*="background:#F5F9F0"],[style*="background: #F5F9F0"],[style*="background-color:#F5F9F0"]{{background:#16140f!important}}
+    [style*="background:#F6F5F2"],[style*="background: #F6F5F2"],[style*="background-color:#F6F5F2"]{{background:#16140f!important}}
+    [style*="background:#F7F2EA"],[style*="background: #F7F2EA"],[style*="background-color:#F7F2EA"]{{background:#241f16!important}}
+    [style*="background:#241f18"],[style*="background: #241f18"],[style*="background-color:#241f18"]{{background:#16140f!important}}
+    [style*="background:#241f18"],[style*="background: #241f18"],[style*="background-color:#241f18"]{{background:#16140f!important}}
+    [style*="background:#F7FCF9"],[style*="background: #F7FCF9"],[style*="background-color:#F7FCF9"]{{background:#16140f!important}}
+    [style*="background:#F8F8F8"],[style*="background: #F8F8F8"],[style*="background-color:#F8F8F8"]{{background:#16140f!important}}
+    [style*="background:#F9F8F6"],[style*="background: #F9F8F6"],[style*="background-color:#F9F8F6"]{{background:#16140f!important}}
+    [style*="background:#F9F9F9"],[style*="background: #F9F9F9"],[style*="background-color:#F9F9F9"]{{background:#16140f!important}}
+    [style*="background:#F9FFF9"],[style*="background: #F9FFF9"],[style*="background-color:#F9FFF9"]{{background:#16140f!important}}
+    [style*="background:#FAFAF8"],[style*="background: #FAFAF8"],[style*="background-color:#FAFAF8"]{{background:#16140f!important}}
+    [style*="background:#FAFAFA"],[style*="background: #FAFAFA"],[style*="background-color:#FAFAFA"]{{background:#16140f!important}}
+    [style*="background:#FBFBFB"],[style*="background: #FBFBFB"],[style*="background-color:#FBFBFB"]{{background:#16140f!important}}
+    [style*="background:#FCE4E4"],[style*="background: #FCE4E4"],[style*="background-color:#FCE4E4"]{{background:#241f16!important}}
+    [style*="background:#FCFCFC"],[style*="background: #FCFCFC"],[style*="background-color:#FCFCFC"]{{background:#16140f!important}}
+    [style*="background:#FDECEA"],[style*="background: #FDECEA"],[style*="background-color:#FDECEA"]{{background:#241f16!important}}
+    [style*="background:#FDF0D0"],[style*="background: #FDF0D0"],[style*="background-color:#FDF0D0"]{{background:#241f16!important}}
+    [style*="background:#FDF0F0"],[style*="background: #FDF0F0"],[style*="background-color:#FDF0F0"]{{background:#241f16!important}}
+    [style*="background:#FDF5E4"],[style*="background: #FDF5E4"],[style*="background-color:#FDF5E4"]{{background:#241f16!important}}
+    [style*="background:#FDF6E3"],[style*="background: #FDF6E3"],[style*="background-color:#FDF6E3"]{{background:#241f16!important}}
+    [style*="background:#FDF8EE"],[style*="background: #FDF8EE"],[style*="background-color:#FDF8EE"]{{background:#241f16!important}}
+    [style*="background:#FEE2E2"],[style*="background: #FEE2E2"],[style*="background-color:#FEE2E2"]{{background:#241f16!important}}
+    [style*="background:#FEF0EF"],[style*="background: #FEF0EF"],[style*="background-color:#FEF0EF"]{{background:#241f16!important}}
+    [style*="background:#FEF2F2"],[style*="background: #FEF2F2"],[style*="background-color:#FEF2F2"]{{background:#241f16!important}}
+    [style*="background:#FEF5E7"],[style*="background: #FEF5E7"],[style*="background-color:#FEF5E7"]{{background:#241f16!important}}
+    [style*="background:#FEF8EC"],[style*="background: #FEF8EC"],[style*="background-color:#FEF8EC"]{{background:#241f16!important}}
+    [style*="background:#FEF9EC"],[style*="background: #FEF9EC"],[style*="background-color:#FEF9EC"]{{background:#241f16!important}}
+    [style*="background:#FEF9F0"],[style*="background: #FEF9F0"],[style*="background-color:#FEF9F0"]{{background:#241f16!important}}
+    [style*="background:#FFEBEE"],[style*="background: #FFEBEE"],[style*="background-color:#FFEBEE"]{{background:#221c26!important}}
+    [style*="background:#FFF"],[style*="background: #FFF"],[style*="background-color:#FFF"]{{background:#16140f!important}}
+    [style*="background:#FFF2F2"],[style*="background: #FFF2F2"],[style*="background-color:#FFF2F2"]{{background:#241f16!important}}
+    [style*="background:#FFF3E0"],[style*="background: #FFF3E0"],[style*="background-color:#FFF3E0"]{{background:#241f16!important}}
+    [style*="background:#FFF8E1"],[style*="background: #FFF8E1"],[style*="background-color:#FFF8E1"]{{background:#241f16!important}}
+    [style*="background:#FFF8E6"],[style*="background: #FFF8E6"],[style*="background-color:#FFF8E6"]{{background:#241f16!important}}
+    [style*="background:#FFFBF0"],[style*="background: #FFFBF0"],[style*="background-color:#FFFBF0"]{{background:#241f16!important}}
+    [style*="background:#fff5f5"],[style*="background: #fff5f5"],[style*="background-color:#fff5f5"]{{background:#16140f!important}}
+    [style*="color:#0b0f17"]{{color:#f4ecdf!important}}
+    [style*="color:#5f7480"]{{color:#c8b487!important}}
+    [style*="color:#1A1A1A"]{{color:#f4ecdf!important}}
+    [style*="color:#1B2A4A"]{{color:#c8b487!important}}
+    [style*="color:#1B6F4A"]{{color:#8faa9a!important}}
+    [style*="color:#1B7A3B"]{{color:#8faa9a!important}}
+    [style*="color:#5f7480"]{{color:#c8b487!important}}
+    [style*="color:#2A6F5A"]{{color:#8faa9a!important}}
+    [style*="color:#2D2D2D"]{{color:#f4ecdf!important}}
+    [style*="color:#2a231b"]{{color:#f4ecdf!important}}
+    [style*="color:#2f2820"]{{color:#f4ecdf!important}}
+    [style*="color:#2f7a52"]{{color:#8faa9a!important}}
+    [style*="color:#333"]{{color:#f4ecdf!important}}
+    [style*="color:#334155"]{{color:#c8b487!important}}
+    [style*="color:#374151"]{{color:#cabeae!important}}
+    [style*="color:#3A6F4A"]{{color:#8faa9a!important}}
+    [style*="color:#3a3128"]{{color:#f4ecdf!important}}
+    [style*="color:#444"]{{color:#cabeae!important}}
+    [style*="color:#453a2c"]{{color:#f4ecdf!important}}
+    [style*="color:#4A7A2A"]{{color:#8faa9a!important}}
+    [style*="color:#555"]{{color:#cabeae!important}}
+    [style*="color:#666"]{{color:#cabeae!important}}
+    [style*="color:#6B7280"]{{color:#9a8e80!important}}
+    [style*="color:#746a5d"]{{color:#cabeae!important}}
+    [style*="color:#777"]{{color:#9a8e80!important}}
+    [style*="color:#7A6010"]{{color:#c68b83!important}}
+    [style*="color:#7a8290"]{{color:#9a8e80!important}}
+    [style*="color:#888"]{{color:#9a8e80!important}}
+    [style*="color:#8B6914"]{{color:#c68b83!important}}
+    [style*="color:#8a3232"]{{color:#c68b83!important}}
+    [style*="color:#8a6a20"]{{color:#c68b83!important}}
+    [style*="color:#7a6636"]{{color:#c68b83!important}}
+    [style*="color:#8a7f70"]{{color:#9a8e80!important}}
+    [style*="color:#9333EA"]{{color:#c8b487!important}}
+    [style*="color:#9a8e80"]{{color:#9a8e80!important}}
+    [style*="color:#B83232"]{{color:#c68b83!important}}
+    [style*="color:#C0392B"]{{color:#c68b83!important}}
+    [style*="color:#DC2626"]{{color:#c68b83!important}}
+    [style*="color:#E65100"]{{color:#c68b83!important}}
+    [style*="color:#e74c3c"]{{color:#c68b83!important}}
+    [style*="#241f18"],[style*="#EEE"],[style*="#e2e0dc"],[style*="#DDD"],[style*="#ddd"]{{border-color:#241f18!important}}
+
   </style>
 </head>
 <body>
@@ -8159,6 +9217,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
     <a class="nav-brand" href="#">CANYON <span>QUANT</span></a>
     <div class="nav-tabs">
       <a onclick="showTab('today')" id="tab-today" class="active">Today</a>
+      <a onclick="showTab('eventengine')" id="tab-eventengine" style="color:#c8b487">利润发动机 (Profit Engine) 🔥</a>
 
       <div class="nav-group" id="navg-portfolio">
         <span class="nav-group-btn" onclick="toggleNavDrop('navg-portfolio')">Portfolio ▾</span>
@@ -8221,7 +9280,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
         <p class="kpi-label">Live Signal Accuracy</p>
         <p class="kpi-val" style="color:{_live_ic_color}">{ric_cur:+.3f}</p>
         <p class="kpi-note" style="color:{_live_ic_color}">{_live_ic_label} · 3M rolling</p>
-        <span style="display:block;font-size:10px;color:#B8943F;margin-top:4px">OOS Backtest baseline: +{oos_ic:.3f} · as of {_ric_last_date}</span>
+        <span style="display:block;font-size:10px;color:#c8b487;margin-top:4px">OOS Backtest baseline: +{oos_ic:.3f} · as of {_ric_last_date}</span>
       </div>
       <div class="kpi">
         <p class="kpi-label">Backtest OOS Sharpe</p>
@@ -8236,7 +9295,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
         <span style="display:block;font-size:10px;color:#888;margin-top:4px">Live paper started Jun 8, 2026</span>
       </div>
       <div class="kpi"><p class="kpi-label">Current Regime (HMM)</p><p class="kpi-val" style="color:{hmm_color};font-size:28px">{hmm}</p><p class="kpi-note" style="color:{hmm_color}">{"Running at full strength" if hmm == "BULL" else "Reduced size — being cautious"}{(" · " + _hmm_prob_label) if _hmm_prob_label else ""}</p>{_hmm_meta}</div>
-      <div class="kpi"><p class="kpi-label">4-Week Macro Outlook</p><p class="kpi-val" style="color:{_mo_color};font-size:28px">{(f"{_mo_bear_prob:.0f}% bear") if _mo_bear_prob is not None else "—"}</p><p class="kpi-note" style="color:{_mo_color}">{_mo_label} · leading indicators</p><span style="display:block;font-size:10px;color:{'#B8943F' if hmm == 'BEAR' and _mo_bear_prob is not None and _mo_bear_prob < 30 else '#888'};margin-top:3px">{'⚡ HMM↔Macro conflict: price dip, not macro shift' if hmm == 'BEAR' and _mo_bear_prob is not None and _mo_bear_prob < 30 else 'Yield curve · credit · VIX · trend · labor'}</span></div>
+      <div class="kpi"><p class="kpi-label">4-Week Macro Outlook</p><p class="kpi-val" style="color:{_mo_color};font-size:28px">{(f"{_mo_bear_prob:.0f}% bear") if _mo_bear_prob is not None else "—"}</p><p class="kpi-note" style="color:{_mo_color}">{_mo_label} · leading indicators</p><span style="display:block;font-size:10px;color:{'#c8b487' if hmm == 'BEAR' and _mo_bear_prob is not None and _mo_bear_prob < 30 else '#888'};margin-top:3px">{'⚡ HMM↔Macro conflict: price dip, not macro shift' if hmm == 'BEAR' and _mo_bear_prob is not None and _mo_bear_prob < 30 else 'Yield curve · credit · VIX · trend · labor'}</span></div>
     </div>
   </div>
 </header>
@@ -8287,12 +9346,12 @@ def build_html(daily: dict, chart: dict, summ: dict,
     {_build_regime_gauge(hmm, _mo_bear_prob)}
 
     <!-- Macro Regime Outlook panel -->
-    <div class="method-card acc" style="margin-bottom:28px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <p style="font-size:10px;font-weight:700;color:#B8943F;margin:0;text-transform:uppercase;letter-spacing:1.5px">Macro Regime Outlook · Forward-Looking Signal</p>
-        <span style="font-size:10px;color:#BBB">5 indicators · 4-week horizon · updated daily</span>
+    <div style="margin-bottom:28px;background:#16140f;border:1px solid #3a3128;border-radius:8px;padding:16px 18px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:16px">
+        <span style="font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:.14em">Macro Regime Outlook · Forward-Looking Signal (4-week)</span>
+        <span style="font-size:10px;color:#8a7f70">5 leading indicators · updated daily</span>
       </div>
-      {_mo_panel()}
+      {_safe_panel(_mo_panel)}
     </div>
 
     {signal_changes_block()}
@@ -8337,14 +9396,14 @@ def build_html(daily: dict, chart: dict, summ: dict,
     </div>
     <div class="mt36">
       <p class="eyebrow">Active Alerts</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Things that need your attention today</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">Things that need your attention today</h3>
       <div class="rule"></div>
       {desk_monitor_rows()}
     </div>
 
     <div class="mt36">
       <p class="eyebrow">Today's Checklist</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">What to do today, in order</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">What to do today, in order</h3>
       <div class="rule"></div>
       <table>
         <thead><tr><th></th><th>Station</th><th>Status</th><th>What to do</th></tr></thead>
@@ -8354,7 +9413,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt36">
       <p class="eyebrow">Priority Stocks — Today's Focus List</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">All stocks ranked by urgency</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">All stocks ranked by urgency</h3>
       <div class="rule"></div>
       <table>
         <thead><tr><th></th><th>Ticker</th><th>Sector</th><th>Priority</th><th>Cycle State</th><th>Action</th></tr></thead>
@@ -8364,7 +9423,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt36">
       <p class="eyebrow">Sector Cycle Map</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Where sector attention belongs today</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">Where sector attention belongs today</h3>
       <div class="rule"></div>
       <table>
         <thead><tr><th>ETF</th><th>Sector</th><th>Cycle State</th><th class="r">20d Ret</th><th class="r">63d Ret</th><th class="r">Weight</th><th>Cap</th></tr></thead>
@@ -8385,9 +9444,9 @@ def build_html(daily: dict, chart: dict, summ: dict,
     <h2 class="section-head">How the strategy performed on live, unseen market data</h2>
     <div class="rule"></div>
 
-    {_build_three_book_panel()}
+    {_safe_panel(_build_three_book_panel)}
 
-    {_build_pnl_ic_panels()}
+    {_safe_panel(_build_pnl_ic_panels)}
 
     <div class="oos-banner" style="margin-top:36px">
       <p class="oos-banner-title">Why these results are trustworthy</p>
@@ -8509,7 +9568,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt36">
       <p class="eyebrow">All Stocks Ranked by Today's Score</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Combined score from all signal sources</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">Combined score from all signal sources</h3>
       <div class="rule"></div>
       <table>
         <thead><tr><th></th><th>Ticker</th><th>Sector</th><th>Score</th><th>Signal</th><th>Crowding</th><th>Top Signals</th><th>Portfolio</th></tr></thead>
@@ -8526,7 +9585,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
           <thead><tr><th>Ticker</th><th class="r">Accrual Ratio</th><th>Signal</th></tr></thead>
           <tbody>{accrual_long_rows()}</tbody>
         </table>
-        <p class="tbl-note mt16" style="text-transform:uppercase;letter-spacing:.8px;font-weight:700;color:#B83232">Low Quality — SHORT candidates</p>
+        <p class="tbl-note mt16" style="text-transform:uppercase;letter-spacing:.8px;font-weight:400;color:#B83232">Low Quality — SHORT candidates</p>
         <table class="mt16"><thead><tr><th>Ticker</th><th class="r">Accrual Ratio</th><th>Signal</th></tr></thead>
         <tbody>{accrual_short_rows()}</tbody></table>
       </div>
@@ -8570,7 +9629,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt36">
       <p class="eyebrow">Today's Risk Check — Per Stock</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">What action is required on each stock today</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">What action is required on each stock today</h3>
       <div class="rule"></div>
       <table>
         <thead><tr><th>Stock</th><th>Sector</th><th class="r">Your size</th><th class="r">Max allowed</th><th>Action</th><th>Why</th></tr></thead>
@@ -8580,14 +9639,14 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt36">
       <p class="eyebrow">Stock Details — What's Blocking Each Trade</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Why each stock is waiting and what needs to change</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">Why each stock is waiting and what needs to change</h3>
       <div class="rule"></div>
       {drilldown_cards()}
     </div>
 
     <div class="mt36">
       <p class="eyebrow">Are We Running With the Crowd?</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Are we running with the crowd?</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">Are we running with the crowd?</h3>
       <p class="lead" style="margin-top:4px">When too many funds own the same stocks, a single large seller can trigger a chain reaction — everyone rushes to exit at once and prices drop sharply. This section monitors how closely our picks overlap with other investors' favorites, so you can see this risk before it happens.</p>
 {crowding_panel()}
     </div>
@@ -8604,7 +9663,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
       </div>
     </div>
 
-    {_build_barra_risk_panel(barra_risk or {})}
+    {_safe_panel(_build_barra_risk_panel, barra_risk or {})}
 
   </div>
 </section>
@@ -8648,7 +9707,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt48">
       <p class="eyebrow">Market Breadth — Are most stocks rising or falling?</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Index &amp; sector health check</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">Index &amp; sector health check</h3>
       <p class="lead" style="margin-top:4px">If the main indexes are above their 20-day and 50-day moving averages, the overall market is healthy. If they're below, the wind is against you.</p>
       <div class="breadth-grid">
 {breadth_cards()}
@@ -8657,7 +9716,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt36">
       <p class="eyebrow">Sector Rotation — Who's leading and who's lagging?</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Which sectors have momentum right now</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">Which sectors have momentum right now</h3>
       <p class="lead" style="margin-top:4px">Sectors are ranked by their momentum score — a blend of 1-month and 3-month returns versus the S&amp;P 500. Money flows from laggards into leaders. Position yourself with the leaders.</p>
       <div class="rot-grid">
 {rotation_cards()}
@@ -8666,7 +9725,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt36">
       <p class="eyebrow">Earnings Calendar — Upcoming reports that could move stocks</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Earnings events in your portfolio</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">Earnings events in your portfolio</h3>
       <p class="lead" style="margin-top:4px">Earnings reports create sudden large moves. The system flags "High risk" when a stock in the portfolio is about to report — this is when we reduce or hedge, not add.</p>
       <div class="cal-grid">
 {earnings_cal_cards()}
@@ -8686,7 +9745,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
     <div class="attr-kpi-row">
       <div class="attr-kpi">
         <p class="attr-kpi-label">How accurate is the model right now? (last 3 months)</p>
-        <p class="attr-kpi-val" style="color:{'#1B6F4A' if ric_cur > 0.25 else '#B8943F' if ric_cur > 0.10 else '#B83232'}">{ric_cur:+.3f}</p>
+        <p class="attr-kpi-val" style="color:{'#1B6F4A' if ric_cur > 0.25 else '#c8b487' if ric_cur > 0.10 else '#B83232'}">{ric_cur:+.3f}</p>
         <p class="attr-kpi-sub">Target accuracy: +{ric_target:.3f} &nbsp; <span class="rolling-ic-status {ric_status_class}">{ric_status.replace('_',' ')}</span></p>
       </div>
       <div class="attr-kpi">
@@ -8708,7 +9767,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt36">
       <p class="eyebrow">Is the Signal Still Working?</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">AI model accuracy — rolling 3-month and 6-month windows</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">AI model accuracy — rolling 3-month and 6-month windows</h3>
       <p class="lead" style="margin-top:4px">This chart tracks whether the AI model is still correctly predicting which stocks will go up. Above +0.25 = strong. +0.10 to +0.25 = usable. Below +0.10 = warning sign. A healthy signal stays consistently positive.</p>
       <div class="chart-box mt16">
         <p class="chart-title">Is the model still working? — accuracy over the last 3 and 6 months</p>
@@ -8719,7 +9778,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt36">
       <p class="eyebrow">How Each Signal Is Performing</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Which signals have been working best recently? (last 18 months)</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">Which signals have been working best recently? (last 18 months)</h3>
       <p class="lead" style="margin-top:4px">Each bar shows whether that signal correctly predicted stock direction that month. Green = signal was right, red = signal was wrong. Momentum has been inconsistent recently — normal in calm markets.</p>
       <div class="chart-box mt16">
         <p class="chart-title">Each signal's accuracy by month — did it correctly predict which stocks would go up?</p>
@@ -8729,7 +9788,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt36">
       <p class="eyebrow">Where Does the Return Come From?</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Return left over after removing what any index fund could have earned</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">Return left over after removing what any index fund could have earned</h3>
       <p class="lead" style="margin-top:4px">This removes the return any passive investor could get just by buying the market, small companies, cheap stocks, etc. What's left is the strategy's genuine edge — return that only this specific model produced, beyond what simple index investing would have given you.</p>
       <div class="ff5-grid">
 {ff5_cards()}
@@ -8738,14 +9797,14 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt36">
       <p class="eyebrow">What drove today's gain or loss?</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">How much did each signal contribute to today's result?</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">How much did each signal contribute to today's result?</h3>
       <p class="lead" style="margin-top:4px">The AI model and the market mode filter together drive most of the day-to-day results. The price-setup and insider signals add smaller but meaningful boosts. This breakdown tells you which part of the system is working hardest — and which to investigate first if performance drops.</p>
-      <div style="background:#fff;border:1px solid #E2E0DC;padding:18px 22px;margin-top:16px">
-        <div style="display:grid;grid-template-columns:180px 1fr 60px 65px;gap:10px;padding-bottom:8px;border-bottom:1px solid #F0EFEC;margin-bottom:4px">
-          <span style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:600">Signal</span>
-          <span style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:600">Contribution bar</span>
-          <span style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:600;text-align:right">Share</span>
-          <span style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:600;text-align:right">P&amp;L %</span>
+      <div style="background:#fff;border:1px solid #241f18;padding:18px 22px;margin-top:16px">
+        <div style="display:grid;grid-template-columns:180px 1fr 60px 65px;gap:10px;padding-bottom:8px;border-bottom:1px solid #241f18;margin-bottom:4px">
+          <span style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:400">Signal</span>
+          <span style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:400">Contribution bar</span>
+          <span style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:400;text-align:right">Share</span>
+          <span style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#BBB;font-weight:400;text-align:right">P&amp;L %</span>
         </div>
 {signal_bars()}
       </div>
@@ -8753,7 +9812,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt36">
       <p class="eyebrow">Full Performance Report</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Full picture — growth, risk, and worst loss during testing</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">Full picture — growth, risk, and worst loss during testing</h3>
       <p class="lead" style="margin-top:4px">Return alone doesn't tell the whole story. These metrics show how smooth the ride was, how bad the worst periods were, and how quickly the strategy recovered. All computed on real-world data only.</p>
       <div class="tearsheet-grid">
 {tearsheet_cards()}
@@ -8774,7 +9833,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="refresh-bar">
       <span>This page shows fresh news every time you open it via the dynamic server. <strong>Last loaded: {today}</strong></span>
-      <span id="countdown-display" style="font-weight:600;color:#1B2A4A"></span>
+      <span id="countdown-display" style="font-weight:400;color:#1B2A4A"></span>
     </div>
 
     <p class="lead">Each news card shows what the story means for the stock — in plain English. A "Bullish signal" story may support a long position; a "Bearish signal" story is a reason to reconsider. "No clear direction" is context only — wait for price confirmation before acting.</p>
@@ -8870,7 +9929,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <div class="mt36">
       <p class="eyebrow">Position Health Check — Is each position still justified?</p>
-      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1A1A1A;margin:8px 0 4px">Open positions — model signal and recommended size</h3>
+      <h3 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:400;color:#1A1A1A;margin:8px 0 4px">Open positions — model signal and recommended size</h3>
       <p class="lead" style="margin-top:4px">For each open position: is the original signal still active? Has the risk gate changed? A green "Signal aligned" means the model still agrees with the position. A "Signal direction changed" means you should review whether to stay in.</p>
       <div class="pos-grid">
 {position_cards()}
@@ -8907,7 +9966,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
             <thead><tr><th>Signal</th><th class="r">Lookback window</th><th class="r">Accuracy score</th><th>Status</th></tr></thead>
             <tbody>
 {chr(10).join(f'              <tr><td style="font-size:12px">{r["signal"].replace("sig_","")}</td><td class="r">{r["horizon"]}d</td><td class="r {"pos" if r["ic"]>0 else "neg"}">{r["ic"]:+.4f}</td><td style="font-size:10px;color:#BBB">COMPLETE</td></tr>' for r in (live.get("ic_rows",[]) or [])) or "              <tr><td colspan='4' style='color:#AAA;text-align:center'>Building — first readings after 21 days</td></tr>"}
-              <tr style="background:#F9F8F6"><td style="font-size:12px;color:#BBB" colspan="2">20-day IC (1-month)</td><td class="r" style="color:#B8943F">PENDING</td><td style="font-size:10px;color:#B8943F">~Jul 8 2026</td></tr>
+              <tr style="background:#F9F8F6"><td style="font-size:12px;color:#BBB" colspan="2">20-day IC (1-month)</td><td class="r" style="color:#c8b487">PENDING</td><td style="font-size:10px;color:#c8b487">~Jul 8 2026</td></tr>
             </tbody>
           </table>
           <p class="tbl-note">Short 1–5 day windows are noisy. The 20-day window (1 month) is the main accuracy test — needs 21 trading days to compute.</p>
@@ -8940,7 +9999,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
           <tr><td>Realistic live target</td><td class="r">+0.03 – +0.05</td><td>After trading costs and real-market friction</td></tr>
           <tr><td>Minimum acceptable in real time</td><td class="r">+0.01</td><td>Borderline — hard to tell signal from noise at this level</td></tr>
           <tr><td>If the model has stopped working</td><td class="r neg">&lt; 0</td><td>Signal no longer working — model review needed</td></tr>
-          <tr class="tr-strong"><td><strong>Current real-time score (1-month window)</strong></td><td class="r" style="color:#B8943F"><strong>PENDING</strong></td><td><strong>First reading expected ~July 8, 2026</strong></td></tr>
+          <tr class="tr-strong"><td><strong>Current real-time score (1-month window)</strong></td><td class="r" style="color:#c8b487"><strong>PENDING</strong></td><td><strong>First reading expected ~July 8, 2026</strong></td></tr>
         </tbody>
       </table>
     </div>
@@ -8956,27 +10015,27 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <!-- Live Regime Status -->
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin:24px 0">
-      <div style="background:#fff;border:1px solid #E2E0DC;padding:20px 22px;border-radius:4px">
+      <div style="background:#fff;border:1px solid #241f18;padding:20px 22px;border-radius:4px">
         <div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;margin-bottom:6px">QQQ Tactical Signal · LIVE</div>
-        <div style="font-family:'Playfair Display',serif;font-size:28px;font-weight:700;color:{_reg_color}">{_reg_regime}</div>
+        <div style="font-family:'Playfair Display',serif;font-size:28px;font-weight:400;color:{_reg_color}">{_reg_regime}</div>
         <div style="font-size:10px;color:#AAA;margin-top:4px">VIX+MA gates · separate from main HMM</div>
-        <div style="font-size:10px;color:{"#B83232" if _reg_hmm_bear else "#1B6F4A"};margin-top:3px;font-weight:600">Main HMM: {_reg_hmm}</div>
+        <div style="font-size:10px;color:{"#B83232" if _reg_hmm_bear else "#1B6F4A"};margin-top:3px;font-weight:400">Main HMM: {_reg_hmm}</div>
         <div style="font-size:10px;color:#AAA;margin-top:3px">{_reg_as_of}</div>
       </div>
-      <div style="background:#fff;border:1px solid #E2E0DC;padding:20px 22px;border-radius:4px">
+      <div style="background:#fff;border:1px solid #241f18;padding:20px 22px;border-radius:4px">
         <div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;margin-bottom:6px">TQQQ Weight · LIVE</div>
-        <div style="font-family:'Playfair Display',serif;font-size:28px;font-weight:700;color:{_reg_vix_c}">{_reg_tqqq_s}</div>
+        <div style="font-family:'Playfair Display',serif;font-size:28px;font-weight:400;color:{_reg_vix_c}">{_reg_tqqq_s}</div>
         <div style="font-size:11px;color:#AAA;margin-top:5px">VIX {_reg_vix:.1f} → {_reg_tier}</div>
         {_reg_hmm_note}
       </div>
-      <div style="background:#fff;border:1px solid #E2E0DC;padding:20px 22px;border-radius:4px">
+      <div style="background:#fff;border:1px solid #241f18;padding:20px 22px;border-radius:4px">
         <div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;margin-bottom:6px">Annual Return (tested period)</div>
-        <div style="font-family:'Playfair Display',serif;font-size:28px;font-weight:700;color:#1B6F4A">{_v251_ar*100:+.1f}%</div>
+        <div style="font-family:'Playfair Display',serif;font-size:28px;font-weight:400;color:#1B6F4A">{_v251_ar*100:+.1f}%</div>
         <div style="font-size:11px;color:#AAA;margin-top:5px">Jan 2019 – May 2026 · {_v251_n} months</div>
       </div>
-      <div style="background:#fff;border:1px solid #E2E0DC;padding:20px 22px;border-radius:4px">
+      <div style="background:#fff;border:1px solid #241f18;padding:20px 22px;border-radius:4px">
         <div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;margin-bottom:6px">Risk score / Worst drop / Beat QQQ</div>
-        <div style="font-family:'Playfair Display',serif;font-size:20px;font-weight:700;color:#1B2A4A">{_v251_sr:.3f} / {_v251_mdd*100:.1f}%</div>
+        <div style="font-family:'Playfair Display',serif;font-size:20px;font-weight:400;color:#1B2A4A">{_v251_sr:.3f} / {_v251_mdd*100:.1f}%</div>
         <div style="font-size:11px;color:#AAA;margin-top:5px">{_v251_beat}/8 years beat QQQ · Recovery score {_v251_cal:.2f}</div>
       </div>
     </div>
@@ -8984,17 +10043,17 @@ def build_html(daily: dict, chart: dict, summ: dict,
     <!-- Live Gate Table -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:24px 0">
       <div>
-        <div style="font-size:12px;font-weight:700;color:#1B2A4A;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px">Live Gate Status</div>
+        <div style="font-size:12px;font-weight:400;color:#1B2A4A;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px">Live Gate Status</div>
         <table>
           <thead><tr><th>Gate</th><th>Live Value</th><th class="r">Status</th></tr></thead>
           <tbody>{v251_regime_rows()}</tbody>
         </table>
       </div>
-      <div style="background:#F7F6F2;border-radius:6px;padding:20px">
-        <div style="font-size:12px;font-weight:700;color:#1B2A4A;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px">VIX-Scale Rule</div>
+      <div style="background:#241f18;border-radius:6px;padding:20px">
+        <div style="font-size:12px;font-weight:400;color:#1B2A4A;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px">VIX-Scale Rule</div>
         <div style="font-size:13px;line-height:2;color:#333">
           VIX &lt; 20 → TQQQ <strong style="color:#1B6F4A">50%</strong> (LOW vol · full exposure)<br>
-          VIX 20–25 → TQQQ <strong style="color:#B8943F">25%</strong> (MID vol · half exposure)<br>
+          VIX 20–25 → TQQQ <strong style="color:#c8b487">25%</strong> (MID vol · half exposure)<br>
           VIX ≥ 25 → TQQQ <strong style="color:#B83232">0%</strong> (HIGH vol · cash instead)<br>
           <span style="color:#888;font-size:11px">+ QQQ 200MA gate + QQQ 3M momentum gate<br>All gates use data available at rebalance date (no lookahead)</span>
         </div>
@@ -9002,14 +10061,14 @@ def build_html(daily: dict, chart: dict, summ: dict,
     </div>
 
     <!-- Cumulative Chart -->
-    <div style="background:#fff;border:1px solid #E2E0DC;border-radius:4px;padding:24px;margin:24px 0">
-      <div style="font-size:13px;font-weight:700;color:#1B2A4A;margin-bottom:4px">Cumulative Returns — v25.1 Canyon vs QQQ vs SPY (2019–2026)</div>
+    <div style="background:#fff;border:1px solid #241f18;border-radius:4px;padding:24px;margin:24px 0">
+      <div style="font-size:13px;font-weight:400;color:#1B2A4A;margin-bottom:4px">Cumulative Returns — v25.1 Canyon vs QQQ vs SPY (2019–2026)</div>
       <div style="font-size:11px;color:#888;margin-bottom:16px">Starting value = 100. Tested on 89 months of data the model had never seen.</div>
       <div style="position:relative;height:280px"><canvas id="v251CumChart"></canvas></div>
     </div>
 
     <!-- Annual Returns Table -->
-    <div style="font-size:13px;font-weight:700;color:#1B2A4A;margin:24px 0 8px;text-transform:uppercase;letter-spacing:1px">Annual Returns vs QQQ</div>
+    <div style="font-size:13px;font-weight:400;color:#1B2A4A;margin:24px 0 8px;text-transform:uppercase;letter-spacing:1px">Annual Returns vs QQQ</div>
     <div style="background:#1B2A4A;border-radius:6px;overflow:hidden">
       <table style="color:rgba(255,255,255,.85)">
         <thead><tr>
@@ -9039,7 +10098,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     <!-- Scorecard -->
     <div style="background:#1B2A4A;border-radius:8px;padding:24px;margin:24px 0">
-      <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#B8943F;font-weight:700;margin-bottom:16px">Institutional Scorecard — All 10 Tests</div>
+      <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#c8b487;font-weight:400;margin-bottom:16px">Institutional Scorecard — All 10 Tests</div>
       <table style="color:rgba(255,255,255,.85)">
         <thead><tr>
           <th style="padding:6px 8px;color:rgba(255,255,255,.5);font-size:11px">Test</th>
@@ -9047,16 +10106,16 @@ def build_html(daily: dict, chart: dict, summ: dict,
           <th style="padding:6px 8px;color:rgba(255,255,255,.5);font-size:11px">Grade</th>
         </tr></thead>
         <tbody>
-          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">① Is the return statistically real?</td><td style="text-align:center;padding:7px">Confidence score {_deep_sr_t:.2f}× above random chance</td><td style="padding:7px;color:#6BCCA0;font-weight:700">A+ PASS</td></tr>
-          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">② Works in calm markets?</td><td style="text-align:center;padding:7px">Low-vol periods: +104.9%/yr</td><td style="padding:7px;color:#6BCCA0;font-weight:700">A+ PASS</td></tr>
-          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">③ Consistent over time?</td><td style="text-align:center;padding:7px">Every 3-year window was profitable</td><td style="padding:7px;color:#6BCCA0;font-weight:700">A+ PASS</td></tr>
-          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">④ How bad can losses get?</td><td style="text-align:center;padding:7px">Avg bad month −2.0% · Worst-case month −5.8%</td><td style="padding:7px;color:#6BCCA0;font-weight:700">A− PASS</td></tr>
-          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">⑤ Works at sector level?</td><td style="text-align:center;padding:7px">Health care confirmed · 73% of picks in high-signal sectors</td><td style="padding:7px;color:#6BCCA0;font-weight:700">A PASS</td></tr>
-          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">⑥ Which sectors drive returns?</td><td style="text-align:center;padding:7px">Tech +3.2%/yr · Energy −0.1%/yr</td><td style="padding:7px;color:#6BCCA0;font-weight:700">A PASS</td></tr>
-          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">⑦ Buy/sell within same sector?</td><td style="text-align:center;padding:7px">Sector-matched pairs: {_deep_sn_ann*100:+.1f}%/yr (statistically significant)</td><td style="padding:7px;color:#6BCCA0;font-weight:700">A PASS</td></tr>
-          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">⑧ Extra return vs S&P 500?</td><td style="text-align:center;padding:7px">Pure excess return {_deep_alpha*100:+.1f}%/yr · near-zero market sensitivity</td><td style="padding:7px;color:#6BCCA0;font-weight:700">A PASS</td></tr>
-          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">⑨ Consistent edge vs benchmark?</td><td style="text-align:center;padding:7px">Consistency score {_deep_ir:.3f} vs QQQ ({"exceptional — rare to exceed 1.0" if _deep_ir >= 1.0 else "solid — approaching 1.0 exceptional threshold"})</td><td style="padding:7px;color:#6BCCA0;font-weight:700">{"A+ PASS" if _deep_ir >= 1.0 else "A PASS"}</td></tr>
-          <tr><td style="padding:7px 8px">⑩ Still works after trading costs?</td><td style="text-align:center;padding:7px">Max cost drag 1.2%/yr · return after all costs ≈ +45%</td><td style="padding:7px;color:#6BCCA0;font-weight:700">A PASS</td></tr>
+          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">① Is the return statistically real?</td><td style="text-align:center;padding:7px">Confidence score {_deep_sr_t:.2f}× above random chance</td><td style="padding:7px;color:#6BCCA0;font-weight:400">A+ PASS</td></tr>
+          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">② Works in calm markets?</td><td style="text-align:center;padding:7px">Low-vol periods: +104.9%/yr</td><td style="padding:7px;color:#6BCCA0;font-weight:400">A+ PASS</td></tr>
+          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">③ Consistent over time?</td><td style="text-align:center;padding:7px">Every 3-year window was profitable</td><td style="padding:7px;color:#6BCCA0;font-weight:400">A+ PASS</td></tr>
+          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">④ How bad can losses get?</td><td style="text-align:center;padding:7px">Avg bad month −2.0% · Worst-case month −5.8%</td><td style="padding:7px;color:#6BCCA0;font-weight:400">A− PASS</td></tr>
+          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">⑤ Works at sector level?</td><td style="text-align:center;padding:7px">Health care confirmed · 73% of picks in high-signal sectors</td><td style="padding:7px;color:#6BCCA0;font-weight:400">A PASS</td></tr>
+          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">⑥ Which sectors drive returns?</td><td style="text-align:center;padding:7px">Tech +3.2%/yr · Energy −0.1%/yr</td><td style="padding:7px;color:#6BCCA0;font-weight:400">A PASS</td></tr>
+          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">⑦ Buy/sell within same sector?</td><td style="text-align:center;padding:7px">Sector-matched pairs: {_deep_sn_ann*100:+.1f}%/yr (statistically significant)</td><td style="padding:7px;color:#6BCCA0;font-weight:400">A PASS</td></tr>
+          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">⑧ Extra return vs S&P 500?</td><td style="text-align:center;padding:7px">Pure excess return {_deep_alpha*100:+.1f}%/yr · near-zero market sensitivity</td><td style="padding:7px;color:#6BCCA0;font-weight:400">A PASS</td></tr>
+          <tr><td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)">⑨ Consistent edge vs benchmark?</td><td style="text-align:center;padding:7px">Consistency score {_deep_ir:.3f} vs QQQ ({"exceptional — rare to exceed 1.0" if _deep_ir >= 1.0 else "solid — approaching 1.0 exceptional threshold"})</td><td style="padding:7px;color:#6BCCA0;font-weight:400">{"A+ PASS" if _deep_ir >= 1.0 else "A PASS"}</td></tr>
+          <tr><td style="padding:7px 8px">⑩ Still works after trading costs?</td><td style="text-align:center;padding:7px">Max cost drag 1.2%/yr · return after all costs ≈ +45%</td><td style="padding:7px;color:#6BCCA0;font-weight:400">A PASS</td></tr>
         </tbody>
       </table>
     </div>
@@ -9064,28 +10123,28 @@ def build_html(daily: dict, chart: dict, summ: dict,
     <!-- Key Stats Grid -->
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin:24px 0">
       <div style="background:#EAF5EE;border-radius:6px;padding:16px;text-align:center">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#1B6F4A;font-weight:700;margin-bottom:6px">Statistical confidence</div>
-        <div style="font-size:24px;font-weight:700;color:#1B6F4A">{_deep_sr_t:.2f}×</div>
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#1B6F4A;font-weight:400;margin-bottom:6px">Statistical confidence</div>
+        <div style="font-size:24px;font-weight:400;color:#1B6F4A">{_deep_sr_t:.2f}×</div>
         <div style="font-size:11px;color:#555;margin-top:4px">Extremely unlikely to be luck — virtually zero chance the return is random</div>
       </div>
       <div style="background:#EAF5EE;border-radius:6px;padding:16px;text-align:center">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#1B6F4A;font-weight:700;margin-bottom:6px">Consistency vs QQQ</div>
-        <div style="font-size:24px;font-weight:700;color:#1B6F4A">{_deep_ir:.3f}</div>
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#1B6F4A;font-weight:400;margin-bottom:6px">Consistency vs QQQ</div>
+        <div style="font-size:24px;font-weight:400;color:#1B6F4A">{_deep_ir:.3f}</div>
         <div style="font-size:11px;color:#555;margin-top:4px">How consistently it beats QQQ — {"above 1.0 is exceptional and rare" if _deep_ir >= 1.0 else "1.0+ is exceptional; approaching threshold"}</div>
       </div>
       <div style="background:#EAF5EE;border-radius:6px;padding:16px;text-align:center">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#1B6F4A;font-weight:700;margin-bottom:6px">Pure extra return vs S&P 500</div>
-        <div style="font-size:24px;font-weight:700;color:#1B6F4A">{_deep_alpha*100:+.1f}%/yr</div>
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#1B6F4A;font-weight:400;margin-bottom:6px">Pure extra return vs S&P 500</div>
+        <div style="font-size:24px;font-weight:400;color:#1B6F4A">{_deep_alpha*100:+.1f}%/yr</div>
         <div style="font-size:11px;color:#555;margin-top:4px">Return above S&P 500 · near-zero sensitivity to the market</div>
       </div>
       <div style="background:#EAF5EE;border-radius:6px;padding:16px;text-align:center">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#1B6F4A;font-weight:700;margin-bottom:6px">Buy/sell within same sector</div>
-        <div style="font-size:24px;font-weight:700;color:#1B6F4A">{_deep_sn_ann*100:+.1f}%/yr</div>
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#1B6F4A;font-weight:400;margin-bottom:6px">Buy/sell within same sector</div>
+        <div style="font-size:24px;font-weight:400;color:#1B6F4A">{_deep_sn_ann*100:+.1f}%/yr</div>
         <div style="font-size:11px;color:#555;margin-top:4px">Matched pairs (same sector, long best / short worst) — statistically confirmed</div>
       </div>
     </div>
 
-    <div style="background:#F7F6F2;border-radius:6px;padding:16px;font-size:12px;color:#555;line-height:1.8">
+    <div style="background:#241f18;border-radius:6px;padding:16px;font-size:12px;color:#555;line-height:1.8">
       <strong>Key findings:</strong> The return-per-risk score (Sharpe) of {oos_sharpe:.3f} is statistically real — {_deep_sr_t:.2f}× above what random chance would produce. Pure extra return above S&P 500 is +{_deep_alpha*100:.1f}%/yr with near-zero sensitivity to overall market moves.
       Consistency score vs QQQ is {_deep_ir:.3f} ({"exceptional — above 1.0 is rare" if _deep_ir >= 1.0 else "solid — 1.0 threshold is exceptional"}). Buy/sell matched pairs within the same sector also produce statistically confirmed returns.
       All 10 quality tests pass at A-grade. Using volatility-based scaling (cutting size in choppy markets) reduces the worst drop from −15.7% to −{abs(deep.get("mdd_v252_cap", deep.get("mdd_v251", 9.37))*100):.1f}% while keeping returns strong.
@@ -9095,13 +10154,13 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
 <style>
 .man-toc-grid{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:32px 0}}
-.man-toc-card{{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #E2E0DC;border-left:3px solid #B8943F;border-radius:8px;padding:12px 16px;text-decoration:none;transition:all .15s}}
+.man-toc-card{{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #241f18;border-left:3px solid #c8b487;border-radius:8px;padding:12px 16px;text-decoration:none;transition:all .15s}}
 .man-toc-card:hover{{background:#F0F4F9;border-left-color:#1B2A4A;box-shadow:0 2px 10px rgba(27,42,74,.1);transform:translateY(-1px)}}
-.man-toc-num{{width:30px;height:30px;min-width:30px;background:#1B2A4A;color:#B8943F;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;font-family:monospace}}
-.man-toc-label{{font-size:13px;color:#1B2A4A;font-weight:600;line-height:1.3}}
-.man-ch{{display:flex;align-items:flex-start;gap:16px;margin:60px 0 18px;padding-bottom:14px;border-bottom:2px solid #E8E6E0}}
-.man-ch-num{{width:42px;height:42px;min-width:42px;background:#1B2A4A;color:#B8943F;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;margin-top:3px}}
-.man-ch-title{{font-family:'Playfair Display',serif;font-size:24px;color:#1B2A4A;font-weight:700;line-height:1.2}}
+.man-toc-num{{width:30px;height:30px;min-width:30px;background:#1B2A4A;color:#c8b487;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:500;font-family:monospace}}
+.man-toc-label{{font-size:13px;color:#1B2A4A;font-weight:400;line-height:1.3}}
+.man-ch{{display:flex;align-items:flex-start;gap:16px;margin:60px 0 18px;padding-bottom:14px;border-bottom:2px solid #241f18}}
+.man-ch-num{{width:42px;height:42px;min-width:42px;background:#1B2A4A;color:#c8b487;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:500;margin-top:3px}}
+.man-ch-title{{font-family:'Playfair Display',serif;font-size:24px;color:#1B2A4A;font-weight:400;line-height:1.2}}
 </style>
 <section id="sec-manual" class="tab-section">
   <div class="container" style="max-width:900px">
@@ -9109,13 +10168,13 @@ def build_html(daily: dict, chart: dict, summ: dict,
     <!-- HERO HEADER -->
     <div style="background:#1B2A4A;border-radius:12px;padding:40px 48px;margin-bottom:40px;position:relative;overflow:hidden">
       <div style="position:absolute;right:-20px;top:-20px;width:200px;height:200px;border-radius:50%;background:rgba(184,148,63,.08)"></div>
-      <p style="font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:#B8943F;font-weight:700;margin:0 0 12px">Read this first</p>
-      <h2 style="font-family:'Playfair Display',serif;font-size:36px;color:#fff;font-weight:700;margin:0 0 14px;line-height:1.15">User Guide</h2>
+      <p style="font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:#c8b487;font-weight:400;margin:0 0 12px">Read this first</p>
+      <h2 style="font-family:'Playfair Display',serif;font-size:36px;color:#fff;font-weight:400;margin:0 0 14px;line-height:1.15">User Guide</h2>
       <p style="font-size:15px;color:rgba(255,255,255,.65);line-height:1.8;margin:0;max-width:580px">Plain English, no jargon. You do not need any finance background to read this. Every technical term is explained the first time it appears.</p>
     </div>
 
     <!-- TABLE OF CONTENTS -->
-    <p style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#B8943F;font-weight:700;margin:0 0 14px">Table of contents — click any section to jump there</p>
+    <p style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#c8b487;font-weight:400;margin:0 0 14px">Table of contents — click any section to jump there</p>
     <div class="man-toc-grid">
       <a href="#man-what"     class="man-toc-card"><span class="man-toc-num">1</span><span class="man-toc-label">What is this thing, really?</span></a>
       <a href="#man-open"     class="man-toc-card"><span class="man-toc-num">2</span><span class="man-toc-label">How to open the dashboard every day</span></a>
@@ -9142,13 +10201,13 @@ def build_html(daily: dict, chart: dict, summ: dict,
       </p>
 
       <div style="background:#F0F4F9;border-left:4px solid #1B2A4A;padding:18px 22px;border-radius:4px;margin-bottom:20px">
-        <p style="font-size:14px;font-weight:700;color:#1B2A4A;margin:0 0 8px">The single most important thing to understand:</p>
+        <p style="font-size:14px;font-weight:400;color:#1B2A4A;margin:0 0 8px">The single most important thing to understand:</p>
         <p style="font-size:14px;line-height:1.8;color:#333;margin:0">This dashboard is a <strong>research tool</strong>, not a trading robot. It cannot buy or sell anything. It has no connection to any brokerage account. Everything it shows you is a suggestion for you to research further — the final decision is always yours.</p>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px">
         <div style="background:#EAF5EE;border-radius:6px;padding:18px 20px">
-          <p style="font-size:12px;font-weight:700;color:#1B6F4A;letter-spacing:1px;text-transform:uppercase;margin:0 0 8px">What it does for you</p>
+          <p style="font-size:12px;font-weight:400;color:#1B6F4A;letter-spacing:1px;text-transform:uppercase;margin:0 0 8px">What it does for you</p>
           <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">
             • Ranks 495 S&amp;P 500 stocks by model score every day<br>
             • Shows you the top 15 stocks to consider buying<br>
@@ -9159,7 +10218,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
           </p>
         </div>
         <div style="background:#FEF9EC;border-radius:6px;padding:18px 20px">
-          <p style="font-size:12px;font-weight:700;color:#B8943F;letter-spacing:1px;text-transform:uppercase;margin:0 0 8px">What it does NOT do</p>
+          <p style="font-size:12px;font-weight:400;color:#c8b487;letter-spacing:1px;text-transform:uppercase;margin:0 0 8px">What it does NOT do</p>
           <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">
             • It does not place any trades on your behalf<br>
             • It cannot access your brokerage account<br>
@@ -9171,8 +10230,8 @@ def build_html(daily: dict, chart: dict, summ: dict,
         </div>
       </div>
 
-      <div style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:18px 22px">
-        <p style="font-size:13px;font-weight:700;color:#1B2A4A;margin:0 0 8px">Where does the data come from?</p>
+      <div style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:18px 22px">
+        <p style="font-size:13px;font-weight:400;color:#1B2A4A;margin:0 0 8px">Where does the data come from?</p>
         <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">All price data comes from Yahoo Finance — the same free source available to anyone with internet access. The system downloads it automatically every evening after the US stock market closes at 4 PM Eastern time. No paid subscriptions or special access is required.</p>
       </div>
     </div>
@@ -9182,38 +10241,38 @@ def build_html(daily: dict, chart: dict, summ: dict,
       <div class="man-ch"><span class="man-ch-num">2</span><div class="man-ch-title">How to open the dashboard every day</div></div>
       <p style="font-size:14px;color:#555;line-height:1.8;margin-bottom:24px">The dashboard lives on your own computer — it is not hosted on the internet. To use it, you need to start a tiny local server first. Here's how:</p>
 
-      <div style="display:grid;gap:0;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
+      <div style="display:grid;gap:0;border:1px solid #241f18;border-radius:8px;overflow:hidden">
         <div style="display:flex;align-items:stretch">
-          <div style="background:#1B2A4A;color:#B8943F;font-size:18px;font-weight:800;min-width:52px;display:flex;align-items:center;justify-content:center">1</div>
-          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #E2E0DC">
-            <p style="font-size:14.5px;font-weight:700;color:#1B2A4A;margin:0 0 6px">Find the file called "Open Canyon Dashboard.command" on your Desktop</p>
+          <div style="background:#1B2A4A;color:#c8b487;font-size:18px;font-weight:500;min-width:52px;display:flex;align-items:center;justify-content:center">1</div>
+          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #241f18">
+            <p style="font-size:14.5px;font-weight:400;color:#1B2A4A;margin:0 0 6px">Find the file called "Open Canyon Dashboard.command" on your Desktop</p>
             <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">It is inside the <strong>canyon_quant</strong> folder, which is in your Desktop folder. It looks like a shell script icon (a small document with a terminal symbol). If you can't find it, open Finder and go to Desktop → canyon_quant.</p>
           </div>
         </div>
         <div style="display:flex;align-items:stretch">
-          <div style="background:#1B2A4A;color:#B8943F;font-size:18px;font-weight:800;min-width:52px;display:flex;align-items:center;justify-content:center">2</div>
-          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #E2E0DC">
-            <p style="font-size:14.5px;font-weight:700;color:#1B2A4A;margin:0 0 6px">Double-click it</p>
+          <div style="background:#1B2A4A;color:#c8b487;font-size:18px;font-weight:500;min-width:52px;display:flex;align-items:center;justify-content:center">2</div>
+          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #241f18">
+            <p style="font-size:14.5px;font-weight:400;color:#1B2A4A;margin:0 0 6px">Double-click it</p>
             <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">A small black Terminal window will pop up for a few seconds, then your web browser (Safari or Chrome) will open automatically and take you to the dashboard. You can close or ignore the Terminal window after that — the server keeps running in the background.</p>
           </div>
         </div>
         <div style="display:flex;align-items:stretch">
-          <div style="background:#1B2A4A;color:#B8943F;font-size:18px;font-weight:800;min-width:52px;display:flex;align-items:center;justify-content:center">3</div>
-          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #E2E0DC">
-            <p style="font-size:14.5px;font-weight:700;color:#1B2A4A;margin:0 0 6px">The browser opens to http://localhost:8888</p>
+          <div style="background:#1B2A4A;color:#c8b487;font-size:18px;font-weight:500;min-width:52px;display:flex;align-items:center;justify-content:center">3</div>
+          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #241f18">
+            <p style="font-size:14.5px;font-weight:400;color:#1B2A4A;margin:0 0 6px">The browser opens to http://localhost:8888</p>
             <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">Bookmark this address (Cmd+D) so you can come back anytime without double-clicking the file again. This address only works while your Mac is on and awake — it is not a public website that anyone else can visit.</p>
           </div>
         </div>
         <div style="display:flex;align-items:stretch">
-          <div style="background:#1B6F4A;color:#fff;font-size:18px;font-weight:800;min-width:52px;display:flex;align-items:center;justify-content:center">✓</div>
+          <div style="background:#1B6F4A;color:#fff;font-size:18px;font-weight:500;min-width:52px;display:flex;align-items:center;justify-content:center">✓</div>
           <div style="padding:18px 22px;flex:1">
-            <p style="font-size:14.5px;font-weight:700;color:#1B6F4A;margin:0 0 6px">Data updates automatically — you don't need to do anything</p>
+            <p style="font-size:14.5px;font-weight:400;color:#1B6F4A;margin:0 0 6px">Data updates automatically — you don't need to do anything</p>
             <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">If the data is more than 8 hours old when you open the dashboard, a banner will appear at the bottom-right corner saying <strong>"⟳ Refreshing data… this takes about 5–10 minutes."</strong> The page will reload itself when it's done. You can keep reading while you wait. If you want to force an immediate update at any time, click the <strong>⟳ Refresh Now</strong> button in the top navigation bar.</p>
           </div>
         </div>
       </div>
 
-      <div style="background:#FEF9EC;border:1px solid #E2D98F;border-radius:6px;padding:14px 20px;margin-top:16px">
+      <div style="background:#FEF9EC;border:1px solid #241f18;border-radius:6px;padding:14px 20px;margin-top:16px">
         <p style="font-size:13px;color:#7A6010;line-height:1.7;margin:0"><strong>Tip:</strong> If you see "Dashboard not found" instead of the dashboard, it means the pipeline has never been run. Open Terminal, type <code style="background:rgba(0,0,0,.06);padding:2px 6px;border-radius:3px">cd ~/Desktop/canyon_quant && python3 run_daily.py</code>, press Enter, and wait 10 minutes. This only needs to happen once.</p>
       </div>
     </div>
@@ -9224,25 +10283,25 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
       <p style="font-size:14px;color:#555;line-height:1.9;margin-bottom:20px">The model score is like a grade from 0 to 100 that the system gives each stock every day. Think of it exactly like a student's report card score — the higher the number, the better the stock is performing across multiple measures right now. A score of 80 means the stock is doing well on most criteria. A score of 20 means it is doing poorly on most criteria.</p>
 
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden;margin-bottom:20px">
-        <div style="padding:16px;background:#EAF5EE;text-align:center;border-right:1px solid #E2E0DC">
-          <p style="font-size:28px;font-weight:800;color:#1B6F4A;margin:0">75–100</p>
-          <p style="font-size:12px;font-weight:700;color:#1B6F4A;margin:4px 0 0">Strong buy signal</p>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid #241f18;border-radius:8px;overflow:hidden;margin-bottom:20px">
+        <div style="padding:16px;background:#EAF5EE;text-align:center;border-right:1px solid #241f18">
+          <p style="font-size:28px;font-weight:500;color:#1B6F4A;margin:0">75–100</p>
+          <p style="font-size:12px;font-weight:400;color:#1B6F4A;margin:4px 0 0">Strong buy signal</p>
           <p style="font-size:11.5px;color:#555;margin:6px 0 0;line-height:1.5">Multiple positive signals all pointing in the same direction</p>
         </div>
-        <div style="padding:16px;background:#F5F9F0;text-align:center;border-right:1px solid #E2E0DC">
-          <p style="font-size:28px;font-weight:800;color:#4A7A2A;margin:0">55–74</p>
-          <p style="font-size:12px;font-weight:700;color:#4A7A2A;margin:4px 0 0">Mild positive</p>
+        <div style="padding:16px;background:#F5F9F0;text-align:center;border-right:1px solid #241f18">
+          <p style="font-size:28px;font-weight:500;color:#4A7A2A;margin:0">55–74</p>
+          <p style="font-size:12px;font-weight:400;color:#4A7A2A;margin:4px 0 0">Mild positive</p>
           <p style="font-size:11.5px;color:#555;margin:6px 0 0;line-height:1.5">More signals are positive than negative</p>
         </div>
-        <div style="padding:16px;background:#FEF9EC;text-align:center;border-right:1px solid #E2E0DC">
-          <p style="font-size:28px;font-weight:800;color:#B8943F;margin:0">35–54</p>
-          <p style="font-size:12px;font-weight:700;color:#B8943F;margin:4px 0 0">Neutral / mixed</p>
+        <div style="padding:16px;background:#FEF9EC;text-align:center;border-right:1px solid #241f18">
+          <p style="font-size:28px;font-weight:500;color:#c8b487;margin:0">35–54</p>
+          <p style="font-size:12px;font-weight:400;color:#c8b487;margin:4px 0 0">Neutral / mixed</p>
           <p style="font-size:11.5px;color:#555;margin:6px 0 0;line-height:1.5">Average stock. No clear direction</p>
         </div>
         <div style="padding:16px;background:#FDECEA;text-align:center">
-          <p style="font-size:28px;font-weight:800;color:#B83232;margin:0">0–34</p>
-          <p style="font-size:12px;font-weight:700;color:#B83232;margin:4px 0 0">Avoid / potential short</p>
+          <p style="font-size:28px;font-weight:500;color:#B83232;margin:0">0–34</p>
+          <p style="font-size:12px;font-weight:400;color:#B83232;margin:4px 0 0">Avoid / potential short</p>
           <p style="font-size:11.5px;color:#555;margin:6px 0 0;line-height:1.5">Multiple negative signals. The model thinks this stock is weak</p>
         </div>
       </div>
@@ -9250,38 +10309,38 @@ def build_html(daily: dict, chart: dict, summ: dict,
       <p style="font-size:13.5px;color:#555;line-height:1.8;margin-bottom:14px"><strong>What goes into the score?</strong> The model looks at 8–10 different things for each stock, combines them, and produces the final number. Here's what each ingredient means in plain language:</p>
 
       <div style="display:grid;gap:10px">
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:14px 18px;display:flex;gap:16px;align-items:flex-start">
-          <div style="flex-shrink:0;width:28px;height:28px;background:#1B2A4A;border-radius:4px;display:flex;align-items:center;justify-content:center"><p style="color:#B8943F;font-size:10px;font-weight:700;margin:0">M</p></div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:14px 18px;display:flex;gap:16px;align-items:flex-start">
+          <div style="flex-shrink:0;width:28px;height:28px;background:#1B2A4A;border-radius:4px;display:flex;align-items:center;justify-content:center"><p style="color:#c8b487;font-size:10px;font-weight:400;margin:0">M</p></div>
           <div>
-            <p style="font-size:13.5px;font-weight:700;color:#1B2A4A;margin:0 0 3px">Momentum</p>
+            <p style="font-size:13.5px;font-weight:400;color:#1B2A4A;margin:0 0 3px">Momentum</p>
             <p style="font-size:13px;color:#555;line-height:1.7;margin:0">Is the stock's price going up over the past few months compared to other stocks? If NVIDIA has gone up 20% while the average stock went up 5%, its momentum score is high. This is not predicting the future — it's measuring a trend that already exists.</p>
           </div>
         </div>
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:14px 18px;display:flex;gap:16px;align-items:flex-start">
-          <div style="flex-shrink:0;width:28px;height:28px;background:#1B2A4A;border-radius:4px;display:flex;align-items:center;justify-content:center"><p style="color:#B8943F;font-size:10px;font-weight:700;margin:0">E</p></div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:14px 18px;display:flex;gap:16px;align-items:flex-start">
+          <div style="flex-shrink:0;width:28px;height:28px;background:#1B2A4A;border-radius:4px;display:flex;align-items:center;justify-content:center"><p style="color:#c8b487;font-size:10px;font-weight:400;margin:0">E</p></div>
           <div>
-            <p style="font-size:13.5px;font-weight:700;color:#1B2A4A;margin:0 0 3px">Earnings surprise</p>
+            <p style="font-size:13.5px;font-weight:400;color:#1B2A4A;margin:0 0 3px">Earnings surprise</p>
             <p style="font-size:13px;color:#555;line-height:1.7;margin:0">When a company reports its quarterly earnings, did it beat expectations or miss them? If the market expected Apple to earn $1.50 per share but they actually earned $1.75 — that's a positive earnings surprise. Companies that consistently beat expectations tend to see their stock rise.</p>
           </div>
         </div>
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:14px 18px;display:flex;gap:16px;align-items:flex-start">
-          <div style="flex-shrink:0;width:28px;height:28px;background:#1B2A4A;border-radius:4px;display:flex;align-items:center;justify-content:center"><p style="color:#B8943F;font-size:10px;font-weight:700;margin:0">A</p></div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:14px 18px;display:flex;gap:16px;align-items:flex-start">
+          <div style="flex-shrink:0;width:28px;height:28px;background:#1B2A4A;border-radius:4px;display:flex;align-items:center;justify-content:center"><p style="color:#c8b487;font-size:10px;font-weight:400;margin:0">A</p></div>
           <div>
-            <p style="font-size:13.5px;font-weight:700;color:#1B2A4A;margin:0 0 3px">Analyst revisions</p>
+            <p style="font-size:13.5px;font-weight:400;color:#1B2A4A;margin:0 0 3px">Analyst revisions</p>
             <p style="font-size:13px;color:#555;line-height:1.7;margin:0">Professional Wall Street analysts update their price targets regularly. When many analysts raise their targets for a stock at the same time, it's a positive signal — it means the professional community is getting more optimistic about that company's future.</p>
           </div>
         </div>
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:14px 18px;display:flex;gap:16px;align-items:flex-start">
-          <div style="flex-shrink:0;width:28px;height:28px;background:#1B2A4A;border-radius:4px;display:flex;align-items:center;justify-content:center"><p style="color:#B8943F;font-size:10px;font-weight:700;margin:0">V</p></div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:14px 18px;display:flex;gap:16px;align-items:flex-start">
+          <div style="flex-shrink:0;width:28px;height:28px;background:#1B2A4A;border-radius:4px;display:flex;align-items:center;justify-content:center"><p style="color:#c8b487;font-size:10px;font-weight:400;margin:0">V</p></div>
           <div>
-            <p style="font-size:13.5px;font-weight:700;color:#1B2A4A;margin:0 0 3px">Volume &amp; liquidity</p>
+            <p style="font-size:13.5px;font-weight:400;color:#1B2A4A;margin:0 0 3px">Volume &amp; liquidity</p>
             <p style="font-size:13px;color:#555;line-height:1.7;margin:0">How many shares are being traded? If a stock suddenly sees 3× its normal trading volume while the price is rising, that's a sign of strong conviction — lots of investors are buying, not just a few. Unusual volume on a quiet day is a warning sign that something may be happening behind the scenes.</p>
           </div>
         </div>
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:14px 18px;display:flex;gap:16px;align-items:flex-start">
-          <div style="flex-shrink:0;width:28px;height:28px;background:#1B2A4A;border-radius:4px;display:flex;align-items:center;justify-content:center"><p style="color:#B8943F;font-size:10px;font-weight:700;margin:0">R</p></div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:14px 18px;display:flex;gap:16px;align-items:flex-start">
+          <div style="flex-shrink:0;width:28px;height:28px;background:#1B2A4A;border-radius:4px;display:flex;align-items:center;justify-content:center"><p style="color:#c8b487;font-size:10px;font-weight:400;margin:0">R</p></div>
           <div>
-            <p style="font-size:13.5px;font-weight:700;color:#1B2A4A;margin:0 0 3px">Relative strength vs sector</p>
+            <p style="font-size:13.5px;font-weight:400;color:#1B2A4A;margin:0 0 3px">Relative strength vs sector</p>
             <p style="font-size:13px;color:#555;line-height:1.7;margin:0">Is this stock outperforming the other companies in its industry? For example, is Pfizer doing better than other pharmaceutical companies? A stock that beats its peers even when the whole sector is down shows unusual strength.</p>
           </div>
         </div>
@@ -9299,40 +10358,40 @@ def build_html(daily: dict, chart: dict, summ: dict,
       <p style="font-size:14px;color:#555;line-height:1.9;margin-bottom:20px">Every day the dashboard shows a market mode at the top of the Today tab. This tells you the overall health of the stock market right now. Think of it like a weather forecast — not for rain, but for whether conditions are good or bad for investing.</p>
 
       <div style="display:grid;gap:14px;margin-bottom:20px">
-        <div style="display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid #C5DEC8">
+        <div style="display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid #26332a">
           <div style="background:#1B6F4A;color:#fff;min-width:90px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px 12px;text-align:center">
-            <p style="font-size:22px;font-weight:800;margin:0">BULL</p>
-            <p style="font-size:10px;font-weight:600;letter-spacing:1px;opacity:.7;margin:4px 0 0">GREEN</p>
+            <p style="font-size:22px;font-weight:500;margin:0">BULL</p>
+            <p style="font-size:10px;font-weight:400;letter-spacing:1px;opacity:.7;margin:4px 0 0">GREEN</p>
           </div>
           <div style="padding:18px 22px;flex:1;background:#F0FAF2">
-            <p style="font-size:13.5px;font-weight:700;color:#1B6F4A;margin:0 0 6px">The market is rising — good conditions for buying</p>
+            <p style="font-size:13.5px;font-weight:400;color:#1B6F4A;margin:0 0 6px">The market is rising — good conditions for buying</p>
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">This means the S&P 500 index is trending upward and investor sentiment is positive. When the mode is BULL, the model runs at full strength: it recommends 15 buy candidates and tracks 15 avoid candidates. This is the best environment for the strategy. Example: most of 2023–2024 was in BULL mode as AI stocks drove the market up.</p>
           </div>
         </div>
-        <div style="display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid #E0C5C5">
+        <div style="display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid #241f18">
           <div style="background:#B83232;color:#fff;min-width:90px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px 12px;text-align:center">
-            <p style="font-size:22px;font-weight:800;margin:0">BEAR</p>
-            <p style="font-size:10px;font-weight:600;letter-spacing:1px;opacity:.7;margin:4px 0 0">RED</p>
+            <p style="font-size:22px;font-weight:500;margin:0">BEAR</p>
+            <p style="font-size:10px;font-weight:400;letter-spacing:1px;opacity:.7;margin:4px 0 0">RED</p>
           </div>
           <div style="padding:18px 22px;flex:1;background:#FDF0F0">
-            <p style="font-size:13.5px;font-weight:700;color:#B83232;margin:0 0 6px">The market is falling — be more careful</p>
+            <p style="font-size:13.5px;font-weight:400;color:#B83232;margin:0 0 6px">The market is falling — be more careful</p>
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">The S&P 500 is in a downtrend. Even good stocks tend to fall during a bear market because investors are selling broadly. In BEAR mode, the model suggests reducing position sizes or holding more cash. Don't add to losing positions. Example: 2022 was mostly BEAR mode as the Federal Reserve raised interest rates rapidly.</p>
           </div>
         </div>
-        <div style="display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid #E0D5B5">
-          <div style="background:#B8943F;color:#fff;min-width:90px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px 12px;text-align:center">
-            <p style="font-size:22px;font-weight:800;margin:0">SIDE</p>
-            <p style="font-size:10px;font-weight:600;letter-spacing:1px;opacity:.7;margin:4px 0 0">WAYS</p>
+        <div style="display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid #241f18">
+          <div style="background:#c8b487;color:#fff;min-width:90px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px 12px;text-align:center">
+            <p style="font-size:22px;font-weight:500;margin:0">SIDE</p>
+            <p style="font-size:10px;font-weight:400;letter-spacing:1px;opacity:.7;margin:4px 0 0">WAYS</p>
           </div>
           <div style="padding:18px 22px;flex:1;background:#FEF9EC">
-            <p style="font-size:13.5px;font-weight:700;color:#B8943F;margin:0 0 6px">No clear direction — be patient</p>
+            <p style="font-size:13.5px;font-weight:400;color:#c8b487;margin:0 0 6px">No clear direction — be patient</p>
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">The market is choppy — some days up, some days down, with no sustained trend. Stock-picking is harder in this environment because even strong signals can be washed out by random market noise. The model remains active but suggests smaller position sizes. Patience is the right move here.</p>
           </div>
         </div>
       </div>
 
-      <div style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:18px 22px">
-        <p style="font-size:13.5px;font-weight:700;color:#1B2A4A;margin:0 0 8px">How is the mode calculated?</p>
+      <div style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:18px 22px">
+        <p style="font-size:13.5px;font-weight:400;color:#1B2A4A;margin:0 0 8px">How is the mode calculated?</p>
         <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">The model looks at three things: (1) whether the S&P 500 is above or below its 200-day average price — if it's above, the long-term trend is still up; (2) how much fear is in the market, measured by the VIX index (a number that goes up when investors are nervous and down when they're calm); (3) recent momentum — has the index been gaining or losing ground over the past 3 months? All three inputs together determine the mode.</p>
       </div>
     </div>
@@ -9343,86 +10402,86 @@ def build_html(daily: dict, chart: dict, summ: dict,
       <p style="font-size:14px;color:#555;line-height:1.9;margin-bottom:20px">The Today tab is the first thing you see when you open the dashboard. It is your main daily screen. Everything important is here.</p>
 
       <div style="display:grid;gap:14px">
-        <div style="border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
+        <div style="border:1px solid #241f18;border-radius:8px;overflow:hidden">
           <div style="background:#1B2A4A;padding:12px 18px;display:flex;align-items:center;gap:10px">
-            <span style="background:#B8943F;color:#1B2A4A;font-size:11px;font-weight:800;padding:2px 8px;border-radius:3px;letter-spacing:1px">SECTION 1</span>
-            <p style="color:#fff;font-size:13px;font-weight:700;margin:0">Market Mode Banner</p>
+            <span style="background:#c8b487;color:#1B2A4A;font-size:11px;font-weight:500;padding:2px 8px;border-radius:3px;letter-spacing:1px">SECTION 1</span>
+            <p style="color:#fff;font-size:13px;font-weight:400;margin:0">Market Mode Banner</p>
           </div>
           <div style="padding:18px 22px">
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">A large banner at the very top tells you the current market mode (BULL / BEAR / SIDEWAYS) and includes the date of the signals. If it says <em>"signals from 2026-06-28"</em>, that's the date the data was last updated — not the date of a news event. This is normal. The date updates every time the pipeline runs.</p>
           </div>
         </div>
 
-        <div style="border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
+        <div style="border:1px solid #241f18;border-radius:8px;overflow:hidden">
           <div style="background:#1B2A4A;padding:12px 18px;display:flex;align-items:center;gap:10px">
-            <span style="background:#B8943F;color:#1B2A4A;font-size:11px;font-weight:800;padding:2px 8px;border-radius:3px;letter-spacing:1px">SECTION 2</span>
-            <p style="color:#fff;font-size:13px;font-weight:700;margin:0">Top Buy Candidates — the green section</p>
+            <span style="background:#c8b487;color:#1B2A4A;font-size:11px;font-weight:500;padding:2px 8px;border-radius:3px;letter-spacing:1px">SECTION 2</span>
+            <p style="color:#fff;font-size:13px;font-weight:400;margin:0">Top Buy Candidates — the green section</p>
           </div>
           <div style="padding:18px 22px">
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0 0 12px">These are the 15 stocks with the highest model score right now. The model is saying: <em>"of all 495 S&P 500 stocks I analyzed today, these 15 look the strongest."</em></p>
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0 0 10px">Each stock card shows:</p>
             <div style="display:grid;gap:8px">
-              <div style="background:#F7F6F2;border-radius:5px;padding:10px 14px;display:flex;gap:12px">
-                <span style="font-weight:700;color:#1B2A4A;font-size:13px;white-space:nowrap">Rank #1, #2…</span>
+              <div style="background:#241f18;border-radius:5px;padding:10px 14px;display:flex;gap:12px">
+                <span style="font-weight:400;color:#1B2A4A;font-size:13px;white-space:nowrap">Rank #1, #2…</span>
                 <span style="font-size:13px;color:#555">#1 is the strongest stock today. Not just the stock with the highest score — it accounts for multiple factors including how stable the signal has been.</span>
               </div>
-              <div style="background:#F7F6F2;border-radius:5px;padding:10px 14px;display:flex;gap:12px">
-                <span style="font-weight:700;color:#1B2A4A;font-size:13px;white-space:nowrap">Score XX/100</span>
+              <div style="background:#241f18;border-radius:5px;padding:10px 14px;display:flex;gap:12px">
+                <span style="font-weight:400;color:#1B2A4A;font-size:13px;white-space:nowrap">Score XX/100</span>
                 <span style="font-size:13px;color:#555">The overall grade for this stock today. A score of 82 means this stock ranks in the top 18% of all 495 stocks on most measures.</span>
               </div>
-              <div style="background:#F7F6F2;border-radius:5px;padding:10px 14px;display:flex;gap:12px">
-                <span style="font-weight:700;color:#1B2A4A;font-size:13px;white-space:nowrap">Signal bars</span>
+              <div style="background:#241f18;border-radius:5px;padding:10px 14px;display:flex;gap:12px">
+                <span style="font-weight:400;color:#1B2A4A;font-size:13px;white-space:nowrap">Signal bars</span>
                 <span style="font-size:13px;color:#555">Small colored bars showing which individual inputs (momentum, earnings, analyst revisions, etc.) are positive. More green bars = more reasons to be optimistic about this stock.</span>
               </div>
-              <div style="background:#F7F6F2;border-radius:5px;padding:10px 14px;display:flex;gap:12px">
-                <span style="font-weight:700;color:#1B2A4A;font-size:13px;white-space:nowrap">"In buy list" badge</span>
+              <div style="background:#241f18;border-radius:5px;padding:10px 14px;display:flex;gap:12px">
+                <span style="font-weight:400;color:#1B2A4A;font-size:13px;white-space:nowrap">"In buy list" badge</span>
                 <span style="font-size:13px;color:#555">A green badge that appears if this stock is already being tracked in the paper trading log. This means the model has been following it and has an entry price recorded.</span>
               </div>
-              <div style="background:#F7F6F2;border-radius:5px;padding:10px 14px;display:flex;gap:12px">
-                <span style="font-weight:700;color:#1B2A4A;font-size:13px;white-space:nowrap">Earnings flag</span>
+              <div style="background:#241f18;border-radius:5px;padding:10px 14px;display:flex;gap:12px">
+                <span style="font-weight:400;color:#1B2A4A;font-size:13px;white-space:nowrap">Earnings flag</span>
                 <span style="font-size:13px;color:#555">If the company has an earnings report coming up soon (within 3 weeks), a warning appears. Earnings announcements can cause big price swings in either direction — be aware before acting.</span>
               </div>
             </div>
           </div>
         </div>
 
-        <div style="border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
+        <div style="border:1px solid #241f18;border-radius:8px;overflow:hidden">
           <div style="background:#1B2A4A;padding:12px 18px;display:flex;align-items:center;gap:10px">
-            <span style="background:#B8943F;color:#1B2A4A;font-size:11px;font-weight:800;padding:2px 8px;border-radius:3px;letter-spacing:1px">SECTION 3</span>
-            <p style="color:#fff;font-size:13px;font-weight:700;margin:0">Stocks to Avoid — the red section</p>
+            <span style="background:#c8b487;color:#1B2A4A;font-size:11px;font-weight:500;padding:2px 8px;border-radius:3px;letter-spacing:1px">SECTION 3</span>
+            <p style="color:#fff;font-size:13px;font-weight:400;margin:0">Stocks to Avoid — the red section</p>
           </div>
           <div style="padding:18px 22px">
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0 0 12px">These are the 15 stocks with the lowest model score right now. The model is saying: <em>"these 15 look the weakest of the 495 I analyzed today."</em></p>
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0 0 10px">What should you do with this information?</p>
             <div style="background:#FDECEA;border-radius:6px;padding:14px 18px;margin-bottom:10px">
-              <p style="font-size:13.5px;font-weight:700;color:#B83232;margin:0 0 4px">If you own any of these stocks already:</p>
+              <p style="font-size:13.5px;font-weight:400;color:#B83232;margin:0 0 4px">If you own any of these stocks already:</p>
               <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">Consider whether you still want to hold them. The model sees something unfavorable. You don't have to sell immediately, but it's worth reviewing why you bought in the first place and whether those reasons still hold.</p>
             </div>
             <div style="background:#FEF9EC;border-radius:6px;padding:14px 18px">
-              <p style="font-size:13.5px;font-weight:700;color:#B8943F;margin:0 0 4px">If you don't own them:</p>
+              <p style="font-size:13.5px;font-weight:400;color:#c8b487;margin:0 0 4px">If you don't own them:</p>
               <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">Simply avoid buying them today. The paper trading system tracks these as potential "short" positions — meaning it monitors whether they actually fall, to test if the signal was correct. You don't need to do anything with shorts unless you specifically want to engage in short selling (which is an advanced strategy with unlimited downside risk).</p>
             </div>
           </div>
         </div>
 
-        <div style="border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
+        <div style="border:1px solid #241f18;border-radius:8px;overflow:hidden">
           <div style="background:#1B2A4A;padding:12px 18px;display:flex;align-items:center;gap:10px">
-            <span style="background:#B8943F;color:#1B2A4A;font-size:11px;font-weight:800;padding:2px 8px;border-radius:3px;letter-spacing:1px">SECTION 4</span>
-            <p style="color:#fff;font-size:13px;font-weight:700;margin:0">What Changed Since Yesterday</p>
+            <span style="background:#c8b487;color:#1B2A4A;font-size:11px;font-weight:500;padding:2px 8px;border-radius:3px;letter-spacing:1px">SECTION 4</span>
+            <p style="color:#fff;font-size:13px;font-weight:400;margin:0">What Changed Since Yesterday</p>
           </div>
           <div style="padding:18px 22px">
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0 0 12px">This is often the most useful part of the Today tab. It shows exactly which stocks entered or exited the top/bottom 15 compared to yesterday:</p>
             <div style="display:grid;gap:10px">
               <div style="display:flex;gap:14px;align-items:flex-start">
-                <span style="background:#EAF5EE;color:#1B6F4A;font-size:12px;font-weight:700;padding:4px 10px;border-radius:4px;white-space:nowrap">NEW BUY ▲</span>
+                <span style="background:#EAF5EE;color:#1B6F4A;font-size:12px;font-weight:400;padding:4px 10px;border-radius:4px;white-space:nowrap">NEW BUY ▲</span>
                 <p style="font-size:13.5px;color:#333;line-height:1.7;margin:0">A stock just entered the top 15 for the first time. This is a fresh, new signal — the model just upgraded this stock. This is the most actionable category. When a stock appears here, it means something changed in its favor overnight (earnings beat, analyst upgrade, price breakout, etc.).</p>
               </div>
               <div style="display:flex;gap:14px;align-items:flex-start">
-                <span style="background:#FDECEA;color:#B83232;font-size:12px;font-weight:700;padding:4px 10px;border-radius:4px;white-space:nowrap">NEW AVOID ▼</span>
+                <span style="background:#FDECEA;color:#B83232;font-size:12px;font-weight:400;padding:4px 10px;border-radius:4px;white-space:nowrap">NEW AVOID ▼</span>
                 <p style="font-size:13.5px;color:#333;line-height:1.7;margin:0">A stock just entered the bottom 15. The model just downgraded it. If you hold this stock, worth investigating why.</p>
               </div>
               <div style="display:flex;gap:14px;align-items:flex-start">
-                <span style="background:#F0F4F9;color:#1B2A4A;font-size:12px;font-weight:700;padding:4px 10px;border-radius:4px;white-space:nowrap">EXITED BUY</span>
+                <span style="background:#F0F4F9;color:#1B2A4A;font-size:12px;font-weight:400;padding:4px 10px;border-radius:4px;white-space:nowrap">EXITED BUY</span>
                 <p style="font-size:13.5px;color:#333;line-height:1.7;margin:0">A stock dropped out of the top 15. It's not a sell signal on its own — it just means something better replaced it. The stock may still be fine, just no longer in the top tier today.</p>
               </div>
             </div>
@@ -9437,80 +10496,80 @@ def build_html(daily: dict, chart: dict, summ: dict,
       <div class="man-ch"><span class="man-ch-num">6</span><div class="man-ch-title">Alerts — what each one means and what to do</div></div>
       <p style="font-size:14px;color:#555;line-height:1.9;margin-bottom:20px">Alerts appear at the bottom of the Today tab. The system watches all 495 stocks every day and flags anything unusual. Here is every alert type explained in plain language, with exactly what to do:</p>
 
-      <p style="font-size:13.5px;font-weight:700;color:#1B2A4A;margin:0 0 10px">Step 1 — Read the colored left border to know how urgent it is</p>
+      <p style="font-size:13.5px;font-weight:400;color:#1B2A4A;margin:0 0 10px">Step 1 — Read the colored left border to know how urgent it is</p>
       <div style="display:grid;gap:10px;margin-bottom:24px">
-        <div style="background:#fff;border:1px solid #E2E0DC;border-left:5px solid #B83232;border-radius:4px;padding:14px 20px">
-          <p style="font-size:12px;font-weight:700;color:#B83232;letter-spacing:1px;text-transform:uppercase;margin:0 0 5px">CRITICAL — Red border — Read this now</p>
+        <div style="background:#fff;border:1px solid #241f18;border-left:5px solid #B83232;border-radius:4px;padding:14px 20px">
+          <p style="font-size:12px;font-weight:400;color:#B83232;letter-spacing:1px;text-transform:uppercase;margin:0 0 5px">CRITICAL — Red border — Read this now</p>
           <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">Something that needs your attention today before making any decision. Read it fully. Every red alert tells you exactly what happened and what to consider doing. Do not skip these.</p>
         </div>
-        <div style="background:#fff;border:1px solid #E2E0DC;border-left:5px solid #B8943F;border-radius:4px;padding:14px 20px">
-          <p style="font-size:12px;font-weight:700;color:#B8943F;letter-spacing:1px;text-transform:uppercase;margin:0 0 5px">WARNING — Orange border — Worth reading soon</p>
+        <div style="background:#fff;border:1px solid #241f18;border-left:5px solid #c8b487;border-radius:4px;padding:14px 20px">
+          <p style="font-size:12px;font-weight:400;color:#c8b487;letter-spacing:1px;text-transform:uppercase;margin:0 0 5px">WARNING — Orange border — Worth reading soon</p>
           <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">Something notable happened but there's no rush. Read it when you have a moment, but you don't need to act immediately.</p>
         </div>
-        <div style="background:#fff;border:1px solid #E2E0DC;border-left:5px solid #2563EB;border-radius:4px;padding:14px 20px">
-          <p style="font-size:12px;font-weight:700;color:#2563EB;letter-spacing:1px;text-transform:uppercase;margin:0 0 5px">INFO — Blue border — No action needed</p>
+        <div style="background:#fff;border:1px solid #241f18;border-left:5px solid #5f7480;border-radius:4px;padding:14px 20px">
+          <p style="font-size:12px;font-weight:400;color:#5f7480;letter-spacing:1px;text-transform:uppercase;margin:0 0 5px">INFO — Blue border — No action needed</p>
           <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">Background context only. The system is keeping you informed. Nothing to do.</p>
         </div>
       </div>
 
-      <p style="font-size:13.5px;font-weight:700;color:#1B2A4A;margin:0 0 10px">Step 2 — Understand the type of alert and what to do</p>
+      <p style="font-size:13.5px;font-weight:400;color:#1B2A4A;margin:0 0 10px">Step 2 — Understand the type of alert and what to do</p>
       <div style="display:grid;gap:12px;margin-bottom:24px">
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
-          <div style="background:#F7F2EA;padding:12px 18px;border-bottom:1px solid #E2E0DC">
-            <p style="font-size:13px;font-weight:700;color:#1B2A4A;margin:0">Price Alert — stock price crossed a key level</p>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:8px;overflow:hidden">
+          <div style="background:#F7F2EA;padding:12px 18px;border-bottom:1px solid #241f18">
+            <p style="font-size:13px;font-weight:400;color:#1B2A4A;margin:0">Price Alert — stock price crossed a key level</p>
           </div>
           <div style="padding:16px 18px">
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0 0 12px">The "4-week low" is the lowest closing price over the past 20 trading days. The "4-week high" is the highest. When a stock crosses either of these thresholds, this alert fires.</p>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
               <div style="background:#FDECEA;border-radius:5px;padding:12px 14px">
-                <p style="font-size:12px;font-weight:700;color:#B83232;margin:0 0 4px">Broke below 4-week low → CRITICAL</p>
+                <p style="font-size:12px;font-weight:400;color:#B83232;margin:0 0 4px">Broke below 4-week low → CRITICAL</p>
                 <p style="font-size:13px;color:#333;line-height:1.7;margin:0 0 8px">Example message: "Price fell to $245.22, which is lower than any close in the past 4 weeks (previous 4-week low was $245.78)." This means the stock is making new recent lows — a clear sign of weakness.</p>
-                <p style="font-size:13px;font-weight:700;color:#B83232;margin:0">What to do: Do not add to this position right now. If you already hold it, check your reasons for buying. If those reasons no longer apply, consider reducing or exiting. At minimum, decide in advance how much further it can fall before you will sell.</p>
+                <p style="font-size:13px;font-weight:400;color:#B83232;margin:0">What to do: Do not add to this position right now. If you already hold it, check your reasons for buying. If those reasons no longer apply, consider reducing or exiting. At minimum, decide in advance how much further it can fall before you will sell.</p>
               </div>
               <div style="background:#EAF5EE;border-radius:5px;padding:12px 14px">
-                <p style="font-size:12px;font-weight:700;color:#1B6F4A;margin:0 0 4px">Broke above 4-week high → INFO or WARNING</p>
+                <p style="font-size:12px;font-weight:400;color:#1B6F4A;margin:0 0 4px">Broke above 4-week high → INFO or WARNING</p>
                 <p style="font-size:13px;color:#333;line-height:1.7;margin:0 0 8px">Example: "Price rose to $312.50, setting a new 4-week high." This is a breakout signal — the stock is showing strength. However, many breakouts fail on the first attempt and reverse.</p>
-                <p style="font-size:13px;font-weight:700;color:#1B6F4A;margin:0">What to do: Watch for 2–3 more days. If the price holds above the breakout level and the stock is also on the buy list, it may be worth researching as a new entry. Don't chase it on day one.</p>
+                <p style="font-size:13px;font-weight:400;color:#1B6F4A;margin:0">What to do: Watch for 2–3 more days. If the price holds above the breakout level and the stock is also on the buy list, it may be worth researching as a new entry. Don't chase it on day one.</p>
               </div>
             </div>
           </div>
         </div>
 
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
-          <div style="background:#F7F2EA;padding:12px 18px;border-bottom:1px solid #E2E0DC">
-            <p style="font-size:13px;font-weight:700;color:#1B2A4A;margin:0">Risk Limit Alert — a position has grown too large</p>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:8px;overflow:hidden">
+          <div style="background:#F7F2EA;padding:12px 18px;border-bottom:1px solid #241f18">
+            <p style="font-size:13px;font-weight:400;color:#1B2A4A;margin:0">Risk Limit Alert — a position has grown too large</p>
           </div>
           <div style="padding:16px 18px">
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0 0 10px">The model has built-in rules that limit how much of the total portfolio can be in any one stock (usually 8–10%) or any one industry sector (usually 25–30%). If a position exceeds these limits — because the stock went up a lot, or because the model kept recommending it — this alert fires.</p>
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0 0 10px">This is the model's way of enforcing diversification. A position that becomes too large means a single bad event in that company can hurt the whole portfolio more than intended.</p>
-            <p style="font-size:13.5px;font-weight:700;color:#B8943F;margin:0">What to do: Consider trimming the position back to within the limit. This doesn't mean the stock is bad — just that it's taken up more than its intended share of the portfolio. Think of it like rebalancing. Sell enough to bring the position back to 8% of your portfolio.</p>
+            <p style="font-size:13.5px;font-weight:400;color:#c8b487;margin:0">What to do: Consider trimming the position back to within the limit. This doesn't mean the stock is bad — just that it's taken up more than its intended share of the portfolio. Think of it like rebalancing. Sell enough to bring the position back to 8% of your portfolio.</p>
           </div>
         </div>
 
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
-          <div style="background:#F7F2EA;padding:12px 18px;border-bottom:1px solid #E2E0DC">
-            <p style="font-size:13px;font-weight:700;color:#1B2A4A;margin:0">News Alert — a major headline was detected</p>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:8px;overflow:hidden">
+          <div style="background:#F7F2EA;padding:12px 18px;border-bottom:1px solid #241f18">
+            <p style="font-size:13px;font-weight:400;color:#1B2A4A;margin:0">News Alert — a major headline was detected</p>
           </div>
           <div style="padding:16px 18px">
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0 0 10px">The system scanned recent news and found a significant headline for one of the tracked stocks. "Significant" means something that historically causes large price movements — earnings releases, merger announcements, FDA decisions, executive departures, regulatory actions, major lawsuits, etc.</p>
-            <p style="font-size:13.5px;font-weight:700;color:#B8943F;margin:0">What to do: Go to the News tab, find the card for that stock, and click on it to read the full story. The card will tell you whether the news is bullish (green), bearish (red), or mixed (yellow). Then cross-reference with the Today tab to see if the stock is still on the buy list or has now appeared on the avoid list.</p>
+            <p style="font-size:13.5px;font-weight:400;color:#c8b487;margin:0">What to do: Go to the News tab, find the card for that stock, and click on it to read the full story. The card will tell you whether the news is bullish (green), bearish (red), or mixed (yellow). Then cross-reference with the Today tab to see if the stock is still on the buy list or has now appeared on the avoid list.</p>
           </div>
         </div>
 
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
-          <div style="background:#F7F2EA;padding:12px 18px;border-bottom:1px solid #E2E0DC">
-            <p style="font-size:13px;font-weight:700;color:#1B2A4A;margin:0">Squeeze Setup — the stock has gone very quiet and a big move may be coming</p>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:8px;overflow:hidden">
+          <div style="background:#F7F2EA;padding:12px 18px;border-bottom:1px solid #241f18">
+            <p style="font-size:13px;font-weight:400;color:#1B2A4A;margin:0">Squeeze Setup — the stock has gone very quiet and a big move may be coming</p>
           </div>
           <div style="padding:16px 18px">
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0 0 10px">This is a price pattern. When a stock's daily trading range (the difference between its highest and lowest price each day) gets unusually narrow for several days in a row — much narrower than its normal range — it's a sign that a big move is building. Traders call this a "volatility squeeze" or "coiled spring." The energy is building; when it releases, the stock typically makes a sharp move in one direction.</p>
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0 0 10px">Important: the model doesn't know which direction the move will go. It only knows that historically, stocks in this pattern tend to make unusually large moves soon.</p>
-            <p style="font-size:13.5px;font-weight:700;color:#B8943F;margin:0">What to do: Watch this stock carefully for the next 3–5 days. If it breaks upward with high volume AND it's on the buy list, research it further. If it breaks downward, it may soon appear on the avoid list. Don't act before seeing the direction of the break.</p>
+            <p style="font-size:13.5px;font-weight:400;color:#c8b487;margin:0">What to do: Watch this stock carefully for the next 3–5 days. If it breaks upward with high volume AND it's on the buy list, research it further. If it breaks downward, it may soon appear on the avoid list. Don't act before seeing the direction of the break.</p>
           </div>
         </div>
       </div>
 
       <div style="background:#F0F4F9;border-radius:6px;padding:16px 22px">
-        <p style="font-size:13.5px;font-weight:700;color:#1B2A4A;margin:0 0 8px">No alerts today — what does that mean?</p>
+        <p style="font-size:13.5px;font-weight:400;color:#1B2A4A;margin:0 0 8px">No alerts today — what does that mean?</p>
         <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">It means everything is within normal ranges. No unusual price moves, no risk breaches, no major news events for tracked stocks. This is the most common outcome on a normal market day. The model is watching continuously — if something changes, an alert will appear tomorrow. A quiet day is a good day.</p>
       </div>
     </div>
@@ -9520,64 +10579,64 @@ def build_html(daily: dict, chart: dict, summ: dict,
       <div class="man-ch"><span class="man-ch-num">7</span><div class="man-ch-title">The News tab — how to read and click the cards</div></div>
       <p style="font-size:14px;color:#555;line-height:1.9;margin-bottom:20px">The News tab collects recent news headlines for the stocks the model is tracking. Each story appears as a card. Here's exactly how to use it:</p>
 
-      <div style="background:#fff;border:1px solid #C5DEC8;border-radius:8px;overflow:hidden;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,.06)">
+      <div style="background:#fff;border:1px solid #26332a;border-radius:8px;overflow:hidden;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,.06)">
         <div style="padding:16px 20px 14px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
             <div style="display:flex;align-items:center;gap:10px">
-              <p style="font-size:18px;font-weight:800;color:#1B2A4A;margin:0">FFIV</p>
-              <span style="background:#E8F5E9;color:#1B6F4A;font-size:11px;font-weight:700;padding:3px 9px;border-radius:3px">Bullish signal</span>
-              <span style="background:#E8F5E9;color:#1B6F4A;font-size:11px;font-weight:600;padding:3px 9px;border-radius:3px;border:1px solid #C5DEC8">In buy list</span>
+              <p style="font-size:18px;font-weight:500;color:#1B2A4A;margin:0">FFIV</p>
+              <span style="background:#241f18;color:#1B6F4A;font-size:11px;font-weight:400;padding:3px 9px;border-radius:3px">Bullish signal</span>
+              <span style="background:#241f18;color:#1B6F4A;font-size:11px;font-weight:400;padding:3px 9px;border-radius:3px;border:1px solid #26332a">In buy list</span>
             </div>
-            <span style="font-size:11px;color:#1B2A4A;background:#F0F4F9;border:1px solid #C7D2E0;padding:4px 10px;border-radius:3px;font-weight:600">Tap to expand ▼</span>
+            <span style="font-size:11px;color:#1B2A4A;background:#F0F4F9;border:1px solid #283038;padding:4px 10px;border-radius:3px;font-weight:400">Tap to expand ▼</span>
           </div>
-          <p style="font-size:14px;font-weight:700;color:#1A1A1A;margin:0 0 5px">RBC Capital Raises Price Target on F5 Networks (FFIV) to $310</p>
+          <p style="font-size:14px;font-weight:400;color:#1A1A1A;margin:0 0 5px">RBC Capital Raises Price Target on F5 Networks (FFIV) to $310</p>
           <p style="font-size:13px;color:#666;margin:0 0 6px;line-height:1.6">A major investment bank's analyst team increased the price they think this stock is worth. They reviewed recent financial results and became more optimistic about the company's future earnings.</p>
           <p style="font-size:11.5px;color:#999;margin:0">Source: Insider Monkey · June 17, 2026</p>
-          <p style="font-size:13px;color:#B8943F;font-weight:600;margin:10px 0 0">→ Positive development. Stock is already on the buy list — this news adds further support to that signal.</p>
+          <p style="font-size:13px;color:#c8b487;font-weight:400;margin:10px 0 0">→ Positive development. Stock is already on the buy list — this news adds further support to that signal.</p>
         </div>
-        <div style="background:#F7F6F2;padding:12px 20px;border-top:1px solid #E2E0DC">
+        <div style="background:#241f18;padding:12px 20px;border-top:1px solid #241f18">
           <p style="font-size:12px;color:#888;margin:0">This is just the summary. Click anywhere on this card to expand it and see the full article text + a button to open the original source.</p>
         </div>
       </div>
 
       <div style="background:#1B2A4A;border-radius:8px;padding:18px 22px;margin-bottom:20px">
-        <p style="font-size:13px;font-weight:700;color:#B8943F;margin:0 0 12px">How to open the original news article — step by step:</p>
+        <p style="font-size:13px;font-weight:400;color:#c8b487;margin:0 0 12px">How to open the original news article — step by step:</p>
         <div style="display:grid;gap:10px">
           <div style="display:flex;gap:12px;align-items:flex-start">
-            <span style="background:#B8943F;color:#1B2A4A;font-size:12px;font-weight:800;padding:2px 8px;border-radius:3px;flex-shrink:0">1</span>
+            <span style="background:#c8b487;color:#1B2A4A;font-size:12px;font-weight:500;padding:2px 8px;border-radius:3px;flex-shrink:0">1</span>
             <p style="font-size:13.5px;color:rgba(255,255,255,.85);margin:0;line-height:1.7">Click anywhere on the news card — the card will expand and show more text</p>
           </div>
           <div style="display:flex;gap:12px;align-items:flex-start">
-            <span style="background:#B8943F;color:#1B2A4A;font-size:12px;font-weight:800;padding:2px 8px;border-radius:3px;flex-shrink:0">2</span>
-            <p style="font-size:13.5px;color:rgba(255,255,255,.85);margin:0;line-height:1.7">Inside the expanded area, find the blue button labeled <strong style="color:#B8943F">"Open source article →"</strong></p>
+            <span style="background:#c8b487;color:#1B2A4A;font-size:12px;font-weight:500;padding:2px 8px;border-radius:3px;flex-shrink:0">2</span>
+            <p style="font-size:13.5px;color:rgba(255,255,255,.85);margin:0;line-height:1.7">Inside the expanded area, find the blue button labeled <strong style="color:#c8b487">"Open source article →"</strong></p>
           </div>
           <div style="display:flex;gap:12px;align-items:flex-start">
-            <span style="background:#B8943F;color:#1B2A4A;font-size:12px;font-weight:800;padding:2px 8px;border-radius:3px;flex-shrink:0">3</span>
+            <span style="background:#c8b487;color:#1B2A4A;font-size:12px;font-weight:500;padding:2px 8px;border-radius:3px;flex-shrink:0">3</span>
             <p style="font-size:13.5px;color:rgba(255,255,255,.85);margin:0;line-height:1.7">Click that button — it opens the original article on the news website in a new browser tab</p>
           </div>
           <div style="display:flex;gap:12px;align-items:flex-start">
-            <span style="background:#B8943F;color:#1B2A4A;font-size:12px;font-weight:800;padding:2px 8px;border-radius:3px;flex-shrink:0">4</span>
-            <p style="font-size:13.5px;color:rgba(255,255,255,.85);margin:0;line-height:1.7">To close the expanded card, click anywhere on the card again or click <strong style="color:#B8943F">"Close ▲"</strong></p>
+            <span style="background:#c8b487;color:#1B2A4A;font-size:12px;font-weight:500;padding:2px 8px;border-radius:3px;flex-shrink:0">4</span>
+            <p style="font-size:13.5px;color:rgba(255,255,255,.85);margin:0;line-height:1.7">To close the expanded card, click anywhere on the card again or click <strong style="color:#c8b487">"Close ▲"</strong></p>
           </div>
         </div>
       </div>
 
-      <p style="font-size:13.5px;font-weight:700;color:#1B2A4A;margin:0 0 10px">What the colored labels mean:</p>
+      <p style="font-size:13.5px;font-weight:400;color:#1B2A4A;margin:0 0 10px">What the colored labels mean:</p>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div style="background:#E8F5E9;border-radius:6px;padding:16px 18px">
-          <p style="font-size:12px;font-weight:700;color:#1B6F4A;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px">Bullish signal (green)</p>
+        <div style="background:#241f18;border-radius:6px;padding:16px 18px">
+          <p style="font-size:12px;font-weight:400;color:#1B6F4A;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px">Bullish signal (green)</p>
           <p style="font-size:13.5px;color:#333;margin:0;line-height:1.7">Good news. Examples: analyst raised their price target, company reported better earnings than expected, a positive product launch, a competitor failed, or the company announced a major new client or contract.</p>
         </div>
         <div style="background:#FDECEA;border-radius:6px;padding:16px 18px">
-          <p style="font-size:12px;font-weight:700;color:#B83232;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px">Bearish signal (red)</p>
+          <p style="font-size:12px;font-weight:400;color:#B83232;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px">Bearish signal (red)</p>
           <p style="font-size:13.5px;color:#333;margin:0;line-height:1.7">Bad news. Examples: analyst cut their price target or rating, earnings came in worse than expected, a regulatory fine or lawsuit, a major executive leaving, a product recall, or loss of a large customer.</p>
         </div>
         <div style="background:#FEF9EC;border-radius:6px;padding:16px 18px">
-          <p style="font-size:12px;font-weight:700;color:#B8943F;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px">Neutral / mixed (yellow)</p>
+          <p style="font-size:12px;font-weight:400;color:#c8b487;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px">Neutral / mixed (yellow)</p>
           <p style="font-size:13.5px;color:#333;margin:0;line-height:1.7">The news could be interpreted either way, or the outcome is too uncertain to classify. Read it and form your own opinion. Don't feel pressure to act on neutral news — it's information, not a signal.</p>
         </div>
         <div style="background:#F0F4F9;border-radius:6px;padding:16px 18px">
-          <p style="font-size:12px;font-weight:700;color:#1B2A4A;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px">"In buy list" / "In avoid list" badge</p>
+          <p style="font-size:12px;font-weight:400;color:#1B2A4A;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px">"In buy list" / "In avoid list" badge</p>
           <p style="font-size:13.5px;color:#333;margin:0;line-height:1.7">This green or red badge appears when the stock in this news card is currently one of your tracked positions (top 15 or bottom 15). It helps you quickly identify which news is relevant to stocks you're actively following.</p>
         </div>
       </div>
@@ -9589,38 +10648,38 @@ def build_html(daily: dict, chart: dict, summ: dict,
       <p style="font-size:14px;color:#555;line-height:1.9;margin-bottom:20px">This tab shows you the historical evidence that the model's signals work — tested honestly on data the model had never seen before. Think of it as the model's report card. Here's how to read every piece of it:</p>
 
       <div style="display:grid;gap:14px">
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
-          <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#B8943F;font-size:12px;font-weight:700;letter-spacing:1px;margin:0;text-transform:uppercase">The portfolio growth chart — blue line vs black line</p></div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:8px;overflow:hidden">
+          <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#c8b487;font-size:12px;font-weight:400;letter-spacing:1px;margin:0;text-transform:uppercase">The portfolio growth chart — blue line vs black line</p></div>
           <div style="padding:18px 22px">
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">Picture two investors: Investor A put $100 into this model's picks on January 1, 2019. Investor B put $100 into an S&P 500 index fund the same day. The blue line shows Investor A's balance over time. The black line shows Investor B. If the blue line is higher on the right side of the chart, the model outperformed just holding the market. All signals were made using only historical data available at that moment — there was no looking into the future.</p>
           </div>
         </div>
 
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
-          <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#B8943F;font-size:12px;font-weight:700;letter-spacing:1px;margin:0;text-transform:uppercase">The monthly accuracy bars — green and red</p></div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:8px;overflow:hidden">
+          <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#c8b487;font-size:12px;font-weight:400;letter-spacing:1px;margin:0;text-transform:uppercase">The monthly accuracy bars — green and red</p></div>
           <div style="padding:18px 22px">
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">Each bar is one month. Green means: the model's top-ranked stocks went up more than its bottom-ranked stocks that month (the model got the direction right). Red means the opposite happened. You want to see mostly green bars, especially consistent patterns — not just green in certain years and red in others, which would suggest the model only worked in specific conditions.</p>
           </div>
         </div>
 
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
-          <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#B8943F;font-size:12px;font-weight:700;letter-spacing:1px;margin:0;text-transform:uppercase">The 4 headline numbers — plain English explanations</p></div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:8px;overflow:hidden">
+          <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#c8b487;font-size:12px;font-weight:400;letter-spacing:1px;margin:0;text-transform:uppercase">The 4 headline numbers — plain English explanations</p></div>
           <div style="padding:18px 22px">
             <div style="display:grid;gap:12px">
-              <div style="background:#F7F6F2;border-radius:6px;padding:14px 18px">
-                <p style="font-size:14px;font-weight:700;color:#1B2A4A;margin:0 0 6px">Signal accuracy (OOS backtest): {oos_ic:+.3f} · Live 3-month: {ric_cur:+.3f}</p>
+              <div style="background:#241f18;border-radius:6px;padding:14px 18px">
+                <p style="font-size:14px;font-weight:400;color:#1B2A4A;margin:0 0 6px">Signal accuracy (OOS backtest): {oos_ic:+.3f} · Live 3-month: {ric_cur:+.3f}</p>
                 <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">Think of this as a test score for how well the model's daily ranking predicts actual stock performance. It ranges from -1.0 (100% wrong every time) to +1.0 (perfectly right every time). A score of 0 means no better than random guessing. Professional quantitative investors consider anything above +0.05 to be commercially valuable. The OOS backtest averaged {oos_ic:+.3f} on data the model never trained on — the live 3-month reading as of {_ric_last_date} is {ric_cur:+.3f} ({_live_ic_label.lower()}).</p>
               </div>
-              <div style="background:#F7F6F2;border-radius:6px;padding:14px 18px">
-                <p style="font-size:14px;font-weight:700;color:#1B2A4A;margin:0 0 6px">Return per unit of risk (OOS backtest): {oos_sharpe:.2f} · Paper return: {pn_gain:+.2f}%</p>
+              <div style="background:#241f18;border-radius:6px;padding:14px 18px">
+                <p style="font-size:14px;font-weight:400;color:#1B2A4A;margin:0 0 6px">Return per unit of risk (OOS backtest): {oos_sharpe:.2f} · Paper return: {pn_gain:+.2f}%</p>
                 <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">This measures efficiency — how much return did the strategy produce per unit of volatility risk taken? Higher is better. To put it in context: a standard S&P 500 index fund typically scores around 0.5–0.7 over long periods. A score of {oos_sharpe:.2f} means this strategy has produced roughly {oos_sharpe/0.6:.0f}× more return per unit of risk than just holding the index. The live paper portfolio (started Jun 8, 2026) shows {pn_gain:+.2f}% return so far. (Sharpe needs a full year of data to be meaningful for the live track.)</p>
               </div>
-              <div style="background:#F7F6F2;border-radius:6px;padding:14px 18px">
-                <p style="font-size:14px;font-weight:700;color:#1B2A4A;margin:0 0 6px">Beat the S&amp;P 500 in {oos_wr:.0f}% of backtest months (OOS 2020–2026)</p>
+              <div style="background:#241f18;border-radius:6px;padding:14px 18px">
+                <p style="font-size:14px;font-weight:400;color:#1B2A4A;margin:0 0 6px">Beat the S&amp;P 500 in {oos_wr:.0f}% of backtest months (OOS 2020–2026)</p>
                 <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">Out of {bt_months} months tested in the out-of-sample period, the strategy produced better monthly returns than just holding the S&P 500 index in {round(oos_wr/100*bt_months):.0f} of those months. This is a very high consistency rate. Even in months where markets fell, the strategy tended to fall less than the index. Note: the test period 2019–2026 included an exceptional bull market in US technology stocks, which may have made results better than typical future periods.</p>
               </div>
-              <div style="background:#F7F6F2;border-radius:6px;padding:14px 18px">
-                <p style="font-size:14px;font-weight:700;color:#1B2A4A;margin:0 0 6px">Worst drawdown during the test period</p>
+              <div style="background:#241f18;border-radius:6px;padding:14px 18px">
+                <p style="font-size:14px;font-weight:400;color:#1B2A4A;margin:0 0 6px">Worst drawdown during the test period</p>
                 <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">The maximum peak-to-trough loss at any point during the test. Every strategy loses money sometimes — the question is how much and for how long. A drawdown of -19% means at some point the strategy fell 19% from its highest point before recovering. This is what you would have experienced if you had been using the strategy during that period. Knowing the historical worst case helps you decide if you can emotionally handle that level of loss.</p>
               </div>
             </div>
@@ -9628,8 +10687,8 @@ def build_html(daily: dict, chart: dict, summ: dict,
         </div>
       </div>
 
-      <div style="background:#FEF9EC;border:1px solid #E2D98F;border-radius:6px;padding:16px 22px;margin-top:16px">
-        <p style="font-size:13.5px;font-weight:700;color:#7A6010;margin:0 0 8px">The honest caveat you should know</p>
+      <div style="background:#FEF9EC;border:1px solid #241f18;border-radius:6px;padding:16px 22px;margin-top:16px">
+        <p style="font-size:13.5px;font-weight:400;color:#7A6010;margin:0 0 8px">The honest caveat you should know</p>
         <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">The backtest only includes companies that are still in the S&P 500 today. Companies that went bankrupt or were removed from the index are excluded — this means the results are slightly better than real-life would have been (because in real life you'd have held some of those failing companies). This is a known issue with almost all stock market backtests, called "survivorship bias." Also, the 2020–2026 period was boosted by massive government stimulus and a technology/AI boom that may not repeat. <strong>Past performance does not guarantee future results.</strong></p>
       </div>
     </div>
@@ -9641,26 +10700,26 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
       <div style="display:grid;gap:14px">
         <div style="background:#F0F4F9;border-left:4px solid #1B2A4A;border-radius:4px;padding:18px 22px">
-          <p style="font-size:14px;font-weight:700;color:#1B2A4A;margin:0 0 8px">How it works — in plain language</p>
+          <p style="font-size:14px;font-weight:400;color:#1B2A4A;margin:0 0 8px">How it works — in plain language</p>
           <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">Every day after market close, the model produces a ranked list of all 495 stocks. The top 15 become the "long" (buy) positions. The bottom 15 become the "short" (avoid) positions. The system records the closing prices on the day each stock enters or exits these lists. Then it tracks whether those stocks actually went up or down in the following days. Over time, this builds an honest, real-money-equivalent track record of whether the signals are actually working.</p>
         </div>
 
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
-          <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#B8943F;font-size:12px;font-weight:700;letter-spacing:1px;margin:0;text-transform:uppercase">Paper NAV — what the number means</p></div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:8px;overflow:hidden">
+          <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#c8b487;font-size:12px;font-weight:400;letter-spacing:1px;margin:0;text-transform:uppercase">Paper NAV — what the number means</p></div>
           <div style="padding:18px 22px">
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">NAV stands for "Net Asset Value" — it's the total simulated portfolio value. It started at $100 on Day 1 (June 8, 2026). Every day it goes up or down based on how the long positions performed versus the short positions. If today's NAV shows $164, that means the paper portfolio has grown 64% since it started. This is simulated money, not real — but it uses real market prices, so it reflects what would have happened if someone had actually traded these signals.</p>
           </div>
         </div>
 
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
-          <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#B8943F;font-size:12px;font-weight:700;letter-spacing:1px;margin:0;text-transform:uppercase">Current positions — open longs and open shorts</p></div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:8px;overflow:hidden">
+          <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#c8b487;font-size:12px;font-weight:400;letter-spacing:1px;margin:0;text-transform:uppercase">Current positions — open longs and open shorts</p></div>
           <div style="padding:18px 22px">
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">This table shows exactly which stocks are currently being tracked in each category, along with the price they entered at and how much they've moved since. "Open long" means we're tracking these as if we bought them. "Open short" means we're tracking these as if we're betting they'll fall. The entry price is the actual closing price on the day the model first ranked that stock in the relevant category.</p>
           </div>
         </div>
 
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
-          <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#B8943F;font-size:12px;font-weight:700;letter-spacing:1px;margin:0;text-transform:uppercase">Days accumulated: 10 / 21 — what does this mean?</p></div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:8px;overflow:hidden">
+          <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#c8b487;font-size:12px;font-weight:400;letter-spacing:1px;margin:0;text-transform:uppercase">Days accumulated: 10 / 21 — what does this mean?</p></div>
           <div style="padding:18px 22px">
             <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">The live track started on June 8, 2026. It needs at least 21 trading days of data to produce a statistically meaningful accuracy score — because with fewer data points, luck can look like skill. 21 trading days is approximately one calendar month. Until that threshold is reached, the counter shows progress (e.g., "10 of 21"). Once 21 days are accumulated, the IC score (how accurately the model predicts returns) becomes meaningful and will be shown prominently.</p>
           </div>
@@ -9674,39 +10733,39 @@ def build_html(daily: dict, chart: dict, summ: dict,
       <p style="font-size:14px;color:#555;line-height:1.9;margin-bottom:20px">This tab covers a completely separate, much simpler strategy that runs alongside the main Canyon model. While the main model picks individual stocks, v25.1 focuses on just one ETF called TQQQ and uses market fear (the VIX index) to decide how much to hold.</p>
 
       <div style="background:#1B2A4A;border-radius:8px;padding:20px 24px;margin-bottom:20px">
-        <p style="font-size:13px;font-weight:700;color:#B8943F;margin:0 0 10px;text-transform:uppercase;letter-spacing:1px">First — what is TQQQ?</p>
+        <p style="font-size:13px;font-weight:400;color:#c8b487;margin:0 0 10px;text-transform:uppercase;letter-spacing:1px">First — what is TQQQ?</p>
         <p style="font-size:13.5px;color:rgba(255,255,255,.85);line-height:1.8;margin:0">TQQQ is a leveraged ETF that tracks the Nasdaq 100 index (the 100 biggest technology and growth companies — Apple, Microsoft, NVIDIA, Amazon, etc.). The key word is "leveraged 3×": every 1% the Nasdaq moves, TQQQ moves approximately 3% in the same direction. If the Nasdaq goes up 2%, TQQQ goes up roughly 6%. If the Nasdaq goes down 2%, TQQQ goes down roughly 6%. This makes it extremely powerful in bull markets and extremely dangerous in bear markets.</p>
       </div>
 
-      <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden;margin-bottom:20px">
-        <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#B8943F;font-size:12px;font-weight:700;letter-spacing:1px;margin:0;text-transform:uppercase">The VIX index — what is it and why does it matter?</p></div>
+      <div style="background:#fff;border:1px solid #241f18;border-radius:8px;overflow:hidden;margin-bottom:20px">
+        <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#c8b487;font-size:12px;font-weight:400;letter-spacing:1px;margin:0;text-transform:uppercase">The VIX index — what is it and why does it matter?</p></div>
         <div style="padding:18px 22px">
           <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">The VIX is the "fear gauge" of the stock market. It measures how much nervousness/uncertainty investors are experiencing right now. When markets are calm and rising, VIX is low (below 15–18). When investors are fearful — during crashes, crises, or major uncertainty — VIX spikes high (above 30, 40, sometimes 80+). During COVID in March 2020, VIX hit 85. The v25.1 strategy uses VIX as a safety switch: when fear is high, reduce exposure. When fear is low, increase exposure.</p>
         </div>
       </div>
 
-      <div style="background:#fff;border:1px solid #E2E0DC;border-radius:8px;overflow:hidden;margin-bottom:20px">
-        <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#B8943F;font-size:12px;font-weight:700;letter-spacing:1px;margin:0;text-transform:uppercase">The exact rules — how much to hold and when</p></div>
+      <div style="background:#fff;border:1px solid #241f18;border-radius:8px;overflow:hidden;margin-bottom:20px">
+        <div style="background:#1B2A4A;padding:12px 18px"><p style="color:#c8b487;font-size:12px;font-weight:400;letter-spacing:1px;margin:0;text-transform:uppercase">The exact rules — how much to hold and when</p></div>
         <div style="padding:0">
-          <div style="display:grid;grid-template-columns:120px 1fr 1fr;border-bottom:1px solid #E2E0DC">
-            <div style="padding:12px 16px;background:#F7F6F2;border-right:1px solid #E2E0DC"><p style="font-size:12px;font-weight:700;color:#666;text-transform:uppercase;margin:0">VIX level</p></div>
-            <div style="padding:12px 16px;background:#F7F6F2;border-right:1px solid #E2E0DC"><p style="font-size:12px;font-weight:700;color:#666;text-transform:uppercase;margin:0">What it means</p></div>
-            <div style="padding:12px 16px;background:#F7F6F2"><p style="font-size:12px;font-weight:700;color:#666;text-transform:uppercase;margin:0">TQQQ allocation</p></div>
+          <div style="display:grid;grid-template-columns:120px 1fr 1fr;border-bottom:1px solid #241f18">
+            <div style="padding:12px 16px;background:#241f18;border-right:1px solid #241f18"><p style="font-size:12px;font-weight:400;color:#666;text-transform:uppercase;margin:0">VIX level</p></div>
+            <div style="padding:12px 16px;background:#241f18;border-right:1px solid #241f18"><p style="font-size:12px;font-weight:400;color:#666;text-transform:uppercase;margin:0">What it means</p></div>
+            <div style="padding:12px 16px;background:#241f18"><p style="font-size:12px;font-weight:400;color:#666;text-transform:uppercase;margin:0">TQQQ allocation</p></div>
           </div>
-          <div style="display:grid;grid-template-columns:120px 1fr 1fr;border-bottom:1px solid #E2E0DC;background:#EAF5EE">
-            <div style="padding:14px 16px;border-right:1px solid #E2E0DC"><p style="font-size:14px;font-weight:700;color:#1B6F4A;margin:0">Below 20</p></div>
-            <div style="padding:14px 16px;border-right:1px solid #E2E0DC"><p style="font-size:13.5px;color:#333;margin:0">Market is calm. Investors are not worried. Good conditions for risk-taking.</p></div>
-            <div style="padding:14px 16px"><p style="font-size:16px;font-weight:800;color:#1B6F4A;margin:0">50% in TQQQ</p></div>
+          <div style="display:grid;grid-template-columns:120px 1fr 1fr;border-bottom:1px solid #241f18;background:#EAF5EE">
+            <div style="padding:14px 16px;border-right:1px solid #241f18"><p style="font-size:14px;font-weight:400;color:#1B6F4A;margin:0">Below 20</p></div>
+            <div style="padding:14px 16px;border-right:1px solid #241f18"><p style="font-size:13.5px;color:#333;margin:0">Market is calm. Investors are not worried. Good conditions for risk-taking.</p></div>
+            <div style="padding:14px 16px"><p style="font-size:16px;font-weight:500;color:#1B6F4A;margin:0">50% in TQQQ</p></div>
           </div>
-          <div style="display:grid;grid-template-columns:120px 1fr 1fr;border-bottom:1px solid #E2E0DC;background:#FEF9EC">
-            <div style="padding:14px 16px;border-right:1px solid #E2E0DC"><p style="font-size:14px;font-weight:700;color:#B8943F;margin:0">20–25</p></div>
-            <div style="padding:14px 16px;border-right:1px solid #E2E0DC"><p style="font-size:13.5px;color:#333;margin:0">Moderate anxiety. Some turbulence. Caution recommended.</p></div>
-            <div style="padding:14px 16px"><p style="font-size:16px;font-weight:800;color:#B8943F;margin:0">25% in TQQQ</p></div>
+          <div style="display:grid;grid-template-columns:120px 1fr 1fr;border-bottom:1px solid #241f18;background:#FEF9EC">
+            <div style="padding:14px 16px;border-right:1px solid #241f18"><p style="font-size:14px;font-weight:400;color:#c8b487;margin:0">20–25</p></div>
+            <div style="padding:14px 16px;border-right:1px solid #241f18"><p style="font-size:13.5px;color:#333;margin:0">Moderate anxiety. Some turbulence. Caution recommended.</p></div>
+            <div style="padding:14px 16px"><p style="font-size:16px;font-weight:500;color:#c8b487;margin:0">25% in TQQQ</p></div>
           </div>
           <div style="display:grid;grid-template-columns:120px 1fr 1fr;background:#FDECEA">
-            <div style="padding:14px 16px;border-right:1px solid #E2E0DC"><p style="font-size:14px;font-weight:700;color:#B83232;margin:0">Above 25</p></div>
-            <div style="padding:14px 16px;border-right:1px solid #E2E0DC"><p style="font-size:13.5px;color:#333;margin:0">High fear. Market is stressed. The kind of environment where TQQQ can fall 20%+ quickly.</p></div>
-            <div style="padding:14px 16px"><p style="font-size:16px;font-weight:800;color:#B83232;margin:0">0% — move to cash</p></div>
+            <div style="padding:14px 16px;border-right:1px solid #241f18"><p style="font-size:14px;font-weight:400;color:#B83232;margin:0">Above 25</p></div>
+            <div style="padding:14px 16px;border-right:1px solid #241f18"><p style="font-size:13.5px;color:#333;margin:0">High fear. Market is stressed. The kind of environment where TQQQ can fall 20%+ quickly.</p></div>
+            <div style="padding:14px 16px"><p style="font-size:16px;font-weight:500;color:#B83232;margin:0">0% — move to cash</p></div>
           </div>
         </div>
       </div>
@@ -9715,11 +10774,11 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
         <div style="background:#EAF5EE;border-radius:6px;padding:16px 18px">
-          <p style="font-size:12px;font-weight:700;color:#1B6F4A;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px">Why this approach works historically</p>
+          <p style="font-size:12px;font-weight:400;color:#1B6F4A;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px">Why this approach works historically</p>
           <p style="font-size:13.5px;color:#333;margin:0;line-height:1.7">The biggest risk with leveraged ETFs is catastrophic drawdowns during crashes. TQQQ fell over 80% in 2022. By using VIX as a fear gauge, the strategy exits before the worst damage happens. From 2012–2026, this approach produced an average annual return of +46% with a maximum drawdown of only -9.4%, compared to buy-and-hold TQQQ which had drawdowns of 80%+.</p>
         </div>
         <div style="background:#FDECEA;border-radius:6px;padding:16px 18px">
-          <p style="font-size:12px;font-weight:700;color:#B83232;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px">The serious risks you must understand</p>
+          <p style="font-size:12px;font-weight:400;color:#B83232;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px">The serious risks you must understand</p>
           <p style="font-size:13.5px;color:#333;margin:0;line-height:1.7">TQQQ is a complex, high-risk instrument. Even 50% in TQQQ means significant exposure to technology sector volatility. VIX doesn't always spike before crashes — sometimes markets drop fast before VIX catches up. This strategy is only appropriate for money you can genuinely afford to lose entirely. Do not use retirement savings or emergency funds for this.</p>
         </div>
       </div>
@@ -9729,28 +10788,28 @@ def build_html(daily: dict, chart: dict, summ: dict,
     <div id="man-other" style="margin-top:56px">
       <div class="man-ch"><span class="man-ch-num">11</span><div class="man-ch-title">Other tabs — quick reference</div></div>
       <div style="display:grid;gap:10px">
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:16px 20px;display:flex;gap:16px;align-items:flex-start">
-          <div style="flex-shrink:0;background:#1B2A4A;color:#B8943F;font-size:11px;font-weight:700;padding:4px 8px;border-radius:3px;white-space:nowrap">Signals</div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:16px 20px;display:flex;gap:16px;align-items:flex-start">
+          <div style="flex-shrink:0;background:#1B2A4A;color:#c8b487;font-size:11px;font-weight:400;padding:4px 8px;border-radius:3px;white-space:nowrap">Signals</div>
           <p style="font-size:13.5px;color:#555;line-height:1.7;margin:0">Shows the full ranked list of all 495 stocks with their scores. You can scroll through and search for any ticker to see its current score, rank, and which signals are driving it. Useful if you want to look up a specific stock that's not in the top or bottom 15.</p>
         </div>
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:16px 20px;display:flex;gap:16px;align-items:flex-start">
-          <div style="flex-shrink:0;background:#1B2A4A;color:#B8943F;font-size:11px;font-weight:700;padding:4px 8px;border-radius:3px;white-space:nowrap">Risk</div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:16px 20px;display:flex;gap:16px;align-items:flex-start">
+          <div style="flex-shrink:0;background:#1B2A4A;color:#c8b487;font-size:11px;font-weight:400;padding:4px 8px;border-radius:3px;white-space:nowrap">Risk</div>
           <p style="font-size:13.5px;color:#555;line-height:1.7;margin:0">Shows a detailed risk analysis of the current paper portfolio — how much is in each sector, which positions are largest, concentration metrics, and whether any position-sizing rules are being violated. Useful for understanding the risk profile of the current picks.</p>
         </div>
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:16px 20px;display:flex;gap:16px;align-items:flex-start">
-          <div style="flex-shrink:0;background:#1B2A4A;color:#B8943F;font-size:11px;font-weight:700;padding:4px 8px;border-radius:3px;white-space:nowrap">Macro</div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:16px 20px;display:flex;gap:16px;align-items:flex-start">
+          <div style="flex-shrink:0;background:#1B2A4A;color:#c8b487;font-size:11px;font-weight:400;padding:4px 8px;border-radius:3px;white-space:nowrap">Macro</div>
           <p style="font-size:13.5px;color:#555;line-height:1.7;margin:0">Shows the big-picture economic environment: VIX level, interest rate trends, sector rotation (which sectors money is flowing into or out of), and the overall market trend. Useful for understanding why the market is in BULL vs BEAR mode and what's driving the current regime.</p>
         </div>
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:16px 20px;display:flex;gap:16px;align-items:flex-start">
-          <div style="flex-shrink:0;background:#1B2A4A;color:#B8943F;font-size:11px;font-weight:700;padding:4px 8px;border-radius:3px;white-space:nowrap">Attribution</div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:16px 20px;display:flex;gap:16px;align-items:flex-start">
+          <div style="flex-shrink:0;background:#1B2A4A;color:#c8b487;font-size:11px;font-weight:400;padding:4px 8px;border-radius:3px;white-space:nowrap">Attribution</div>
           <p style="font-size:13.5px;color:#555;line-height:1.7;margin:0">Shows which signals contributed most to recent returns — which individual factors (momentum, earnings, analyst revisions, etc.) were the biggest drivers of portfolio performance this month. Useful for understanding whether the strategy is working for the right reasons.</p>
         </div>
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:16px 20px;display:flex;gap:16px;align-items:flex-start">
-          <div style="flex-shrink:0;background:#1B2A4A;color:#B8943F;font-size:11px;font-weight:700;padding:4px 8px;border-radius:3px;white-space:nowrap">Methodology</div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:16px 20px;display:flex;gap:16px;align-items:flex-start">
+          <div style="flex-shrink:0;background:#1B2A4A;color:#c8b487;font-size:11px;font-weight:400;padding:4px 8px;border-radius:3px;white-space:nowrap">Methodology</div>
           <p style="font-size:13.5px;color:#555;line-height:1.7;margin:0">A technical description of how the model was built — which signals are used, how they're weighted, how the backtest was conducted, and known limitations. This tab is for readers with a finance or quantitative background. You don't need to read it to use the dashboard.</p>
         </div>
-        <div style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:16px 20px;display:flex;gap:16px;align-items:flex-start">
-          <div style="flex-shrink:0;background:#1B2A4A;color:#B8943F;font-size:11px;font-weight:700;padding:4px 8px;border-radius:3px;white-space:nowrap">Deep Research</div>
+        <div style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:16px 20px;display:flex;gap:16px;align-items:flex-start">
+          <div style="flex-shrink:0;background:#1B2A4A;color:#c8b487;font-size:11px;font-weight:400;padding:4px 8px;border-radius:3px;white-space:nowrap">Deep Research</div>
           <p style="font-size:13.5px;color:#555;line-height:1.7;margin:0">In-depth analysis of individual top picks — additional context beyond the model score, including valuation, sector trends, earnings history, and analyst consensus. Useful when you've identified a stock on the buy list and want to research it further before making a decision.</p>
         </div>
       </div>
@@ -9761,54 +10820,54 @@ def build_html(daily: dict, chart: dict, summ: dict,
       <div class="man-ch"><span class="man-ch-num">12</span><div class="man-ch-title">Your 5-minute morning routine</div></div>
       <p style="font-size:14px;color:#555;line-height:1.9;margin-bottom:24px">You don't need to spend hours on this. The model does the work overnight. Your job every morning is to review what it found and decide whether anything needs your attention. Here's the exact routine:</p>
 
-      <div style="border:1px solid #E2E0DC;border-radius:8px;overflow:hidden">
+      <div style="border:1px solid #241f18;border-radius:8px;overflow:hidden">
         <div style="display:flex;align-items:stretch">
           <div style="background:#1B2A4A;min-width:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 8px;border-bottom:1px solid rgba(255,255,255,.1)">
-            <p style="color:#B8943F;font-size:20px;font-weight:800;margin:0">1</p>
+            <p style="color:#c8b487;font-size:20px;font-weight:500;margin:0">1</p>
             <p style="color:rgba(255,255,255,.5);font-size:10px;margin:2px 0 0;text-align:center">30 sec</p>
           </div>
-          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #E2E0DC">
-            <p style="font-size:14.5px;font-weight:700;color:#1B2A4A;margin:0 0 6px">Check the Market Mode at the top of the Today tab</p>
+          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #241f18">
+            <p style="font-size:14.5px;font-weight:400;color:#1B2A4A;margin:0 0 6px">Check the Market Mode at the top of the Today tab</p>
             <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">BULL, BEAR, or SIDEWAYS? This tells you the context for everything else you'll read today. In BULL mode, the signals are firing at full strength. In BEAR mode, be cautious about any action. In SIDEWAYS mode, patience is the right move.</p>
           </div>
         </div>
         <div style="display:flex;align-items:stretch">
           <div style="background:#1B2A4A;min-width:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 8px;border-bottom:1px solid rgba(255,255,255,.1)">
-            <p style="color:#B8943F;font-size:20px;font-weight:800;margin:0">2</p>
+            <p style="color:#c8b487;font-size:20px;font-weight:500;margin:0">2</p>
             <p style="color:rgba(255,255,255,.5);font-size:10px;margin:2px 0 0;text-align:center">1 min</p>
           </div>
-          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #E2E0DC">
-            <p style="font-size:14.5px;font-weight:700;color:#1B2A4A;margin:0 0 6px">Scroll to the Alerts section — check for any red CRITICAL alerts</p>
+          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #241f18">
+            <p style="font-size:14.5px;font-weight:400;color:#1B2A4A;margin:0 0 6px">Scroll to the Alerts section — check for any red CRITICAL alerts</p>
             <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">Are there any red-bordered alerts? If yes, read the full alert — it tells you exactly what happened and what action to consider. Orange warnings: read them but no rush. No alerts at all: excellent — nothing needs your attention today.</p>
           </div>
         </div>
         <div style="display:flex;align-items:stretch">
           <div style="background:#1B2A4A;min-width:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 8px;border-bottom:1px solid rgba(255,255,255,.1)">
-            <p style="color:#B8943F;font-size:20px;font-weight:800;margin:0">3</p>
+            <p style="color:#c8b487;font-size:20px;font-weight:500;margin:0">3</p>
             <p style="color:rgba(255,255,255,.5);font-size:10px;margin:2px 0 0;text-align:center">2 min</p>
           </div>
-          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #E2E0DC">
-            <p style="font-size:14.5px;font-weight:700;color:#1B2A4A;margin:0 0 6px">Look at "What Changed Since Yesterday" — focus on NEW BUY entries</p>
+          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #241f18">
+            <p style="font-size:14.5px;font-weight:400;color:#1B2A4A;margin:0 0 6px">Look at "What Changed Since Yesterday" — focus on NEW BUY entries</p>
             <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">A stock that just entered the top 15 for the first time ("New buy ▲") is the most actionable signal the dashboard produces. Something changed overnight that pushed it up. Research that stock further. Similarly, any stock that just appeared as "New avoid ▼" warrants a look if you happen to hold it.</p>
           </div>
         </div>
         <div style="display:flex;align-items:stretch">
           <div style="background:#1B2A4A;min-width:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 8px;border-bottom:1px solid rgba(255,255,255,.1)">
-            <p style="color:#B8943F;font-size:20px;font-weight:800;margin:0">4</p>
+            <p style="color:#c8b487;font-size:20px;font-weight:500;margin:0">4</p>
             <p style="color:rgba(255,255,255,.5);font-size:10px;margin:2px 0 0;text-align:center">1 min</p>
           </div>
-          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #E2E0DC">
-            <p style="font-size:14.5px;font-weight:700;color:#1B2A4A;margin:0 0 6px">Click the News tab — scan for cards with "In buy list" or "In avoid list" badges</p>
+          <div style="padding:18px 22px;flex:1;border-bottom:1px solid #241f18">
+            <p style="font-size:14.5px;font-weight:400;color:#1B2A4A;margin:0 0 6px">Click the News tab — scan for cards with "In buy list" or "In avoid list" badges</p>
             <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">These are the news stories most relevant to your current tracked positions. Click any card to expand it and read the summary. If something looks significant, click "Open source article →" to read the full story. You don't need to read every card — just the ones with badges or red/green labels.</p>
           </div>
         </div>
         <div style="display:flex;align-items:stretch">
           <div style="background:#1B6F4A;min-width:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 8px">
-            <p style="color:#fff;font-size:20px;font-weight:800;margin:0">✓</p>
+            <p style="color:#fff;font-size:20px;font-weight:500;margin:0">✓</p>
             <p style="color:rgba(255,255,255,.7);font-size:10px;margin:2px 0 0;text-align:center">done</p>
           </div>
           <div style="padding:18px 22px;flex:1">
-            <p style="font-size:14.5px;font-weight:700;color:#1B6F4A;margin:0 0 6px">You're done — close the tab and go about your day</p>
+            <p style="font-size:14.5px;font-weight:400;color:#1B6F4A;margin:0 0 6px">You're done — close the tab and go about your day</p>
             <p style="font-size:13.5px;color:#555;line-height:1.8;margin:0">The system runs overnight automatically. Fresh data will be ready tomorrow morning. You don't need to check it again until tomorrow — unless a specific news event happens that you want to look up. Avoid the temptation to check it multiple times a day; this is a daily signal system, not an intraday trading tool.</p>
           </div>
         </div>
@@ -9820,23 +10879,23 @@ def build_html(daily: dict, chart: dict, summ: dict,
       <div class="man-ch"><span class="man-ch-num">13</span><div class="man-ch-title">Common mistakes to avoid</div></div>
       <div style="display:grid;gap:12px">
         <div style="background:#FDECEA;border-left:4px solid #B83232;border-radius:4px;padding:16px 20px">
-          <p style="font-size:13.5px;font-weight:700;color:#B83232;margin:0 0 6px">Mistake: Acting on a signal without reading the earnings flag</p>
+          <p style="font-size:13.5px;font-weight:400;color:#B83232;margin:0 0 6px">Mistake: Acting on a signal without reading the earnings flag</p>
           <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">If a stock is on the buy list but has an earnings report coming up in the next 3 weeks, the card shows a warning flag. Earnings announcements can cause sudden 10–20% price moves in either direction — even if the stock otherwise looks strong. Read the flag before deciding. The model does not predict earnings outcomes.</p>
         </div>
         <div style="background:#FDECEA;border-left:4px solid #B83232;border-radius:4px;padding:16px 20px">
-          <p style="font-size:13.5px;font-weight:700;color:#B83232;margin:0 0 6px">Mistake: Ignoring the market mode and buying aggressively in BEAR mode</p>
+          <p style="font-size:13.5px;font-weight:400;color:#B83232;margin:0 0 6px">Mistake: Ignoring the market mode and buying aggressively in BEAR mode</p>
           <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">Even the best individual stocks tend to fall when the overall market is falling. If the market mode is BEAR, the environment is unfavorable for new long positions. Waiting for the mode to return to BULL or SIDEWAYS before adding positions has historically produced better results than buying into a falling market.</p>
         </div>
         <div style="background:#FDECEA;border-left:4px solid #B83232;border-radius:4px;padding:16px 20px">
-          <p style="font-size:13.5px;font-weight:700;color:#B83232;margin:0 0 6px">Mistake: Treating the model score as a price target or guarantee</p>
+          <p style="font-size:13.5px;font-weight:400;color:#B83232;margin:0 0 6px">Mistake: Treating the model score as a price target or guarantee</p>
           <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">A score of 85/100 does not mean this stock will go up 85%. It means the stock looks stronger than 85% of the S&P 500 right now on the model's measures. The score can change tomorrow if new data arrives. Use it as a ranking tool, not a prediction.</p>
         </div>
         <div style="background:#FDECEA;border-left:4px solid #B83232;border-radius:4px;padding:16px 20px">
-          <p style="font-size:13.5px;font-weight:700;color:#B83232;margin:0 0 6px">Mistake: Checking the dashboard multiple times per day looking for intraday signals</p>
+          <p style="font-size:13.5px;font-weight:400;color:#B83232;margin:0 0 6px">Mistake: Checking the dashboard multiple times per day looking for intraday signals</p>
           <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">This system uses end-of-day closing prices. The signals are designed to be held for days to weeks, not minutes or hours. Looking at it at 10 AM vs 2 PM vs 4 PM will show you the same data. The only time data changes is after 4 PM market close when the pipeline runs.</p>
         </div>
-        <div style="background:#FEF9EC;border-left:4px solid #B8943F;border-radius:4px;padding:16px 20px">
-          <p style="font-size:13.5px;font-weight:700;color:#B8943F;margin:0 0 6px">Tip: Don't over-concentrate — own more than just #1 on the list</p>
+        <div style="background:#FEF9EC;border-left:4px solid #c8b487;border-radius:4px;padding:16px 20px">
+          <p style="font-size:13.5px;font-weight:400;color:#c8b487;margin:0 0 6px">Tip: Don't over-concentrate — own more than just #1 on the list</p>
           <p style="font-size:13.5px;color:#333;line-height:1.8;margin:0">Even if #1 on the buy list looks amazing, putting everything into one stock is very risky. The model shows you 15 picks for a reason — spreading across 10–15 positions reduces the damage if any single one fails unexpectedly. No signal, however strong, predicts the future with certainty.</p>
         </div>
       </div>
@@ -9846,40 +10905,40 @@ def build_html(daily: dict, chart: dict, summ: dict,
     <div id="man-faq" style="margin-top:56px;margin-bottom:60px">
       <div class="man-ch"><span class="man-ch-num">14</span><div class="man-ch-title">FAQ — questions people always ask</div></div>
       <div style="display:grid;gap:10px">
-        <details style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:0">
-          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:700;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">Is this using real money? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
+        <details style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:0">
+          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:400;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">Is this using real money? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
           <p style="padding:4px 20px 18px;font-size:13.5px;color:#555;line-height:1.8;margin:0">No. The dashboard is a research tool. It has no connection to any brokerage account or bank. All "paper trading" results are simulations using real market prices — but no actual money changes hands. This is not financial advice. Any real trading decisions you make based on this research are entirely your own responsibility.</p>
         </details>
-        <details style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:0">
-          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:700;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">The date on the dashboard is from yesterday. Is something broken? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
+        <details style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:0">
+          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:400;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">The date on the dashboard is from yesterday. Is something broken? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
           <p style="padding:4px 20px 18px;font-size:13.5px;color:#555;line-height:1.8;margin:0">This is normal if you open the dashboard during market hours (before 4 PM Eastern time). The data updates after the market closes, so before the daily pipeline runs you'll see yesterday's signals. If you want to force an immediate update, click <strong>⟳ Refresh Now</strong> in the top navigation bar. Also note: weekends and US market holidays have no new data — the signals from Friday carry forward to Monday.</p>
         </details>
-        <details style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:0">
-          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:700;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">The page is spinning and says "Refreshing data…" — how long does it take? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
+        <details style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:0">
+          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:400;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">The page is spinning and says "Refreshing data…" — how long does it take? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
           <p style="padding:4px 20px 18px;font-size:13.5px;color:#555;line-height:1.8;margin:0">The full pipeline downloads fresh price data for 495 stocks, runs all the signal calculations, generates the new HTML file, and saves all outputs. This takes 5–10 minutes on most computers. The page will reload itself automatically when it's done. You can read the current version of the dashboard while waiting — nothing is broken. If it takes more than 20 minutes, try clicking ⟳ Refresh Now again.</p>
         </details>
-        <details style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:0">
-          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:700;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">A stock is #1 on the buy list. Should I buy it right now? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
+        <details style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:0">
+          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:400;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">A stock is #1 on the buy list. Should I buy it right now? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
           <p style="padding:4px 20px 18px;font-size:13.5px;color:#555;line-height:1.8;margin:0">The model score is a research input — not a buy order. Before acting, check: (1) Does the stock have an earnings report coming up soon? If yes, wait. (2) Is the market mode BULL, BEAR, or SIDEWAYS? In BEAR mode, even top-ranked stocks often fall. (3) Do you already know what this company does and why it's strong? Read the news card. (4) Does this fit within your overall portfolio sizing — don't put more than 8–10% of your capital in any single stock. The model narrows your universe from 495 to 15. You still do the final research.</p>
         </details>
-        <details style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:0">
-          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:700;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">Why only 15 stocks? Used to be 97. <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
+        <details style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:0">
+          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:400;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">Why only 15 stocks? Used to be 97. <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
           <p style="padding:4px 20px 18px;font-size:13.5px;color:#555;line-height:1.8;margin:0">The backtests that showed strong outperformance used concentrated portfolios of 10–20 stocks — not 97. Holding 97 stocks is essentially the same as holding an index fund: you get average returns minus costs. The model's "edge" — its ability to identify the strongest stocks — only works if you actually concentrate on those strongest stocks. Holding 97 dilutes the signal so much that the edge disappears. 15 concentrated picks with high scores have historically produced far better returns than 97 mediocre picks.</p>
         </details>
-        <details style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:0">
-          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:700;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">The backtest shows +46% annual return. Is that real? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
+        <details style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:0">
+          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:400;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">The backtest shows +46% annual return. Is that real? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
           <p style="padding:4px 20px 18px;font-size:13.5px;color:#555;line-height:1.8;margin:0">The backtest was conducted honestly: every signal used only data available at that moment in time — no future data was used. That said, the number has caveats: (1) Survivorship bias — only current S&P 500 members are included; failed companies are excluded, making results slightly better than real life would have been. (2) The period 2020–2026 was driven by extraordinary tech/AI tailwinds that may not repeat. (3) Transaction costs and slippage (the gap between theoretical prices and actual execution prices) are not fully accounted for. Real-world returns would likely be lower. <strong>Past results cannot guarantee future performance.</strong></p>
         </details>
-        <details style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:0">
-          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:700;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">I see a CRITICAL alert. Do I have to sell immediately? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
+        <details style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:0">
+          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:400;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">I see a CRITICAL alert. Do I have to sell immediately? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
           <p style="padding:4px 20px 18px;font-size:13.5px;color:#555;line-height:1.8;margin:0">No. A CRITICAL alert is a flag that says "something happened — consider this information before your next decision." It is not an automatic sell order. Read the alert carefully — the orange action line at the bottom tells you what to consider doing. Often it says "don't add to this position" rather than "sell immediately." You decide. The model surfaces the information; the human makes the call.</p>
         </details>
-        <details style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:0">
-          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:700;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">Can I use this for stocks outside the S&amp;P 500? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
+        <details style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:0">
+          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:400;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">Can I use this for stocks outside the S&amp;P 500? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
           <p style="padding:4px 20px 18px;font-size:13.5px;color:#555;line-height:1.8;margin:0">Currently no — the model was trained and calibrated on S&P 500 stocks only. The signals may not transfer to small-cap stocks, international stocks, ETFs, or crypto. The stock universe is the approximately 495 companies currently in the S&P 500 index. Adding other assets would require retraining the model on their specific data characteristics.</p>
         </details>
-        <details style="background:#fff;border:1px solid #E2E0DC;border-radius:6px;padding:0">
-          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:700;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">Do I need to do anything to set up the daily auto-refresh? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
+        <details style="background:#fff;border:1px solid #241f18;border-radius:6px;padding:0">
+          <summary style="padding:16px 20px;cursor:pointer;font-size:14px;font-weight:400;color:#1B2A4A;list-style:none;display:flex;justify-content:space-between;align-items:center">Do I need to do anything to set up the daily auto-refresh? <span style="color:#BBB;font-weight:400;font-size:16px">▼</span></summary>
           <p style="padding:4px 20px 18px;font-size:13.5px;color:#555;line-height:1.8;margin:0">If you've set up the cron job (the automatic daily schedule), the pipeline runs itself at 6 PM every weekday and fresh data is ready before you wake up. If the cron job is not installed, the dashboard will still refresh automatically when you open it — it checks whether the data is more than 8 hours old and triggers a refresh if needed. You don't have to do anything manually. Just open the dashboard and let it run.</p>
         </details>
       </div>
@@ -9915,7 +10974,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
       Live OOS IC by horizon, cross-signal correlation, and joint portfolio beta.
       Updated each time the daily pipeline runs.</p>
 
-    {_build_signal_health_section(signal_health or {})}
+    {_safe_panel(_build_signal_health_section, signal_health or {})}
 
   </div>
 </section>
@@ -9942,6 +11001,8 @@ def build_html(daily: dict, chart: dict, summ: dict,
 {_build_heatmap_tab()}
 
 <!-- ══════════════════════════════════════════════════════════ DATA HEALTH -->
+{_build_event_engine_tab()}
+
 {_build_data_health_tab()}
 
 <!-- ══════════════════════════════════════════════════════════ QUANT QC -->
@@ -9981,9 +11042,9 @@ def build_html(daily: dict, chart: dict, summ: dict,
 <!-- EXPORT / PRINT BUTTON (floating, desktop only) -->
 <button onclick="window.print()" title="Export / Print current tab as PDF"
   style="position:fixed;bottom:24px;right:24px;z-index:888;
-  background:#1B2A4A;color:#B8943F;border:1px solid #B8943F;
+  background:#1B2A4A;color:#c8b487;border:1px solid #c8b487;
   padding:8px 14px;border-radius:4px;cursor:pointer;font-size:11px;
-  font-weight:700;letter-spacing:1px;text-transform:uppercase;
+  font-weight:400;letter-spacing:1px;text-transform:uppercase;
   box-shadow:0 2px 8px rgba(0,0,0,.25)">
   ⬇ Export PDF
 </button>
@@ -10009,7 +11070,7 @@ var _TAB_GROUP = {{
   live:'portfolio', perf:'portfolio', attr:'portfolio', risk:'portfolio',
   signals:'research', dcf:'research', earnings:'research', shorts:'research', deep:'research',
   heatmap:'market', macro:'market', flow:'market', famous:'market', news:'market',
-  v251:'system', method:'system', health:'system', manual:'system', qc:'system', datahealth:'system'
+  v251:'system', method:'system', health:'system', manual:'system', qc:'system', datahealth:'system', eventengine:'', eventengine:''
 }};
 
 function showTab(name) {{
@@ -10055,7 +11116,7 @@ function showTab(name) {{
         {{
           label: 'Strategy',
           data: btStrat,
-          backgroundColor: btStrat.map(v => v >= 0 ? 'rgba(27,42,74,0.75)' : 'rgba(184,50,50,0.70)'),
+          backgroundColor: btStrat.map(v => v >= 0 ? 'rgba(90,100,116,0.55)' : 'rgba(184,50,50,0.70)'),
           borderRadius: 2, barPercentage: 0.6
         }},
         {{
@@ -10073,14 +11134,14 @@ function showTab(name) {{
         legend: {{position:'top', align:'end', labels:{{boxWidth:14,padding:16,font:{{size:11}},color:'#666'}}}},
         tooltip: {{
           backgroundColor:'#fff', titleColor:'#1A1A1A', bodyColor:'#555',
-          borderColor:'#E2E0DC', borderWidth:1, padding:10,
+          borderColor:'#241f18', borderWidth:1, padding:10,
           callbacks: {{label: ctx => `  ${{ctx.dataset.label}}: ${{ctx.parsed.y > 0 ? '+' : ''}}${{ctx.parsed.y.toFixed(2)}}%`}}
         }}
       }},
       scales: {{
         x: {{grid:{{display:false}}, border:{{display:false}}, ticks:{{color:'#BBB',font:{{size:10}},maxTicksLimit:12}}}},
         y: {{
-          grid:{{color:'#F2F1EE'}}, border:{{display:false}},
+          grid:{{color:'#241f18'}}, border:{{display:false}},
           ticks:{{color:'#BBB', font:{{size:11}}, callback: v => v+'%'}}
         }}
       }}
@@ -10121,14 +11182,14 @@ function showTab(name) {{
         legend: {{position:'top', align:'end', labels:{{boxWidth:28,boxHeight:2,padding:20,font:{{size:12}},color:'#666'}}}},
         tooltip: {{
           backgroundColor:'#fff', titleColor:'#1A1A1A', bodyColor:'#666',
-          borderColor:'#E2E0DC', borderWidth:1, padding:12,
+          borderColor:'#241f18', borderWidth:1, padding:12,
           callbacks: {{label: ctx => `  ${{ctx.dataset.label}}: ${{ctx.parsed.y > 0 ? '+' : ''}}${{ctx.parsed.y.toFixed(1)}}%`}}
         }}
       }},
       scales: {{
         x: {{grid:{{display:false}}, border:{{display:false}}, ticks:{{color:'#BBB',font:{{size:11}},maxTicksLimit:10}}}},
         y: {{
-          grid:{{color:'#F2F1EE'}}, border:{{display:false}},
+          grid:{{color:'#241f18'}}, border:{{display:false}},
           ticks:{{color:'#BBB', font:{{size:11}}, callback: v => v+'%'}}
         }}
       }}
@@ -10157,7 +11218,7 @@ function showTab(name) {{
         ...(pnHwm.length ? [{{
           label: 'High-Water Mark',
           data: pnHwm,
-          borderColor: '#B8943F', backgroundColor: 'transparent',
+          borderColor: '#c8b487', backgroundColor: 'transparent',
           fill: false, borderWidth: 1.5, borderDash: [4,4], pointRadius: 0, tension: 0.3
         }}] : [])
       ]
@@ -10169,14 +11230,14 @@ function showTab(name) {{
         legend: {{position:'top', align:'end', labels:{{boxWidth:28,boxHeight:2,padding:20,font:{{size:12}},color:'#666'}}}},
         tooltip: {{
           backgroundColor:'#fff', titleColor:'#1A1A1A', bodyColor:'#666',
-          borderColor:'#E2E0DC', borderWidth:1, padding:12,
+          borderColor:'#241f18', borderWidth:1, padding:12,
           callbacks: {{label: ctx => `  ${{ctx.dataset.label}}: $${{ctx.parsed.y.toLocaleString('en-US',{{minimumFractionDigits:2}})}}`}}
         }}
       }},
       scales: {{
         x: {{grid:{{display:false}}, border:{{display:false}}, ticks:{{color:'#BBB',font:{{size:11}},maxTicksLimit:10}}}},
         y: {{
-          grid:{{color:'#F2F1EE'}}, border:{{display:false}},
+          grid:{{color:'#241f18'}}, border:{{display:false}},
           ticks:{{color:'#BBB', font:{{size:11}}, callback: v => '$'+v.toLocaleString()}}
         }}
       }}
@@ -10217,14 +11278,14 @@ new Chart(ctx, {{
       legend: {{position:'top', align:'end', labels:{{boxWidth:28,boxHeight:2,padding:20,font:{{size:12}},color:'#666'}}}},
       tooltip: {{
         backgroundColor:'#fff',titleColor:'#1A1A1A',bodyColor:'#666',
-        borderColor:'#E2E0DC',borderWidth:1,padding:12,
+        borderColor:'#241f18',borderWidth:1,padding:12,
         callbacks: {{label: ctx => `  ${{ctx.dataset.label}}:  ${{ctx.parsed.y.toFixed(0)}}`}}
       }}
     }},
     scales: {{
       x: {{grid:{{display:false}},border:{{display:false}},ticks:{{color:'#BBB',font:{{size:11}},maxTicksLimit:10}}}},
       y: {{
-        grid:{{color:'#F2F1EE'}},border:{{display:false}},
+        grid:{{color:'#241f18'}},border:{{display:false}},
         type: 'logarithmic',
         ticks:{{color:'#BBB',font:{{size:11}},callback: v => v >= 1000 ? (v/1000).toFixed(0)+'k' : v}}
       }}
@@ -10246,20 +11307,20 @@ new Chart(ctx, {{
       labels,
       datasets: [
         {{label:'Accuracy last 3 months',data:ic3m,borderColor:'#1B2A4A',backgroundColor:'rgba(27,42,74,0.08)',fill:true,tension:0.3,pointRadius:3,borderWidth:2}},
-        {{label:'Accuracy last 6 months',data:ic6m,borderColor:'#B8943F',backgroundColor:'transparent',borderDash:[5,4],tension:0.3,pointRadius:2,borderWidth:1.5}},
+        {{label:'Accuracy last 6 months',data:ic6m,borderColor:'#c8b487',backgroundColor:'transparent',borderDash:[5,4],tension:0.3,pointRadius:2,borderWidth:1.5}},
         {{label:'Accuracy target',data:labels.map(()=>target),borderColor:'#1B6F4A',borderDash:[2,4],pointRadius:0,borderWidth:1.5}},
-        {{label:'Warning zone',data:labels.map(()=>0.10),borderColor:'#E2E0DC',borderDash:[2,4],pointRadius:0,borderWidth:1}},
+        {{label:'Warning zone',data:labels.map(()=>0.10),borderColor:'#241f18',borderDash:[2,4],pointRadius:0,borderWidth:1}},
       ]
     }},
     options: {{
       responsive:true,maintainAspectRatio:false,
       plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}},color:'#666'}}}},
-        tooltip:{{backgroundColor:'#fff',titleColor:'#1A1A1A',bodyColor:'#555',borderColor:'#E2E0DC',borderWidth:1,padding:10,
+        tooltip:{{backgroundColor:'#fff',titleColor:'#1A1A1A',bodyColor:'#555',borderColor:'#241f18',borderWidth:1,padding:10,
           callbacks:{{label: ctx => `  ${{ctx.dataset.label}}: ${{ctx.parsed.y.toFixed(3)}}`}}}}
       }},
       scales:{{
         x:{{grid:{{display:false}},border:{{display:false}},ticks:{{color:'#BBB',font:{{size:10}},maxTicksLimit:12}}}},
-        y:{{grid:{{color:'#F2F1EE'}},border:{{display:false}},
+        y:{{grid:{{color:'#241f18'}},border:{{display:false}},
           ticks:{{color:'#BBB',font:{{size:11}},callback:v=>v.toFixed(2)}}}}
       }}
     }}
@@ -10287,12 +11348,12 @@ new Chart(ctx, {{
     options: {{
       responsive:true,maintainAspectRatio:false,
       plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}},color:'#666'}}}},
-        tooltip:{{backgroundColor:'#fff',titleColor:'#1A1A1A',bodyColor:'#555',borderColor:'#E2E0DC',borderWidth:1,padding:10,
+        tooltip:{{backgroundColor:'#fff',titleColor:'#1A1A1A',bodyColor:'#555',borderColor:'#241f18',borderWidth:1,padding:10,
           callbacks:{{label:ctx=>`  ${{ctx.dataset.label}}: ${{ctx.parsed.y.toFixed(3)}}`}}}}
       }},
       scales:{{
         x:{{grid:{{display:false}},border:{{display:false}},ticks:{{color:'#BBB',font:{{size:10}},maxTicksLimit:12}}}},
-        y:{{grid:{{color:'#F2F1EE'}},border:{{display:false}},
+        y:{{grid:{{color:'#241f18'}},border:{{display:false}},
           ticks:{{color:'#BBB',font:{{size:11}},callback:v=>v.toFixed(2)}}}}
       }}
     }}
@@ -10328,13 +11389,13 @@ function openDrilldown(ticker) {{
   const crowdDisp = _CROWD[d.crowding] || (d.crowding ? d.crowding.charAt(0).toUpperCase() + d.crowding.slice(1).toLowerCase() : '—');
   const signalRaw = d.signal || '';
   const signalColor = (signalRaw==='LONG'||signalRaw==='BUY'||signalRaw==='STRONG BUY') ? '#1B6F4A' : ((signalRaw==='SHORT'||signalRaw==='SELL'||signalRaw==='STRONG SELL') ? '#B83232' : '#666');
-  const riskColors  = {{'CLEAR':'#1B6F4A','OK':'#1B6F4A','PASS':'#B8943F','HOLD':'#B8943F','REVIEW':'#B8943F','BLOCKED':'#B83232','SIZE_DOWN':'#B83232','REDUCE_ONLY':'#B83232'}};
+  const riskColors  = {{'CLEAR':'#1B6F4A','OK':'#1B6F4A','PASS':'#c8b487','HOLD':'#c8b487','REVIEW':'#c8b487','BLOCKED':'#B83232','SIZE_DOWN':'#B83232','REDUCE_ONLY':'#B83232'}};
   const riskColor   = riskColors[d.risk_action] || '#666';
 
   // Signal bars
   let sigsHtml = Object.entries(d.sigs).map(([name, val]) => {{
     const pct   = Math.max(0, Math.min(100, val));
-    const color = pct > 65 ? '#1B6F4A' : (pct < 35 ? '#B83232' : '#B8943F');
+    const color = pct > 65 ? '#1B6F4A' : (pct < 35 ? '#B83232' : '#c8b487');
     return `<div class="dd-sig-row">
       <span class="dd-sig-name">${{name}}</span>
       <div class="dd-sig-bar-wrap"><div class="dd-sig-bar" style="width:${{pct}}%;background:${{color}}"></div></div>
@@ -10451,7 +11512,7 @@ function toggleNews(id) {{
   function showRefreshing() {{
     var b = getBanner();
     b.innerHTML = '<span style="font-size:18px;animation:spin 1s linear infinite;display:inline-block">⟳</span>'
-                + '<span>Refreshing data…<br><span style="color:#B8943F;font-size:11px">page will reload when done</span></span>';
+                + '<span>Refreshing data…<br><span style="color:#c8b487;font-size:11px">page will reload when done</span></span>';
     b.style.display = 'flex';
     if (!document.getElementById('canyon-spin-style')) {{
       var s = document.createElement('style');
@@ -10501,7 +11562,7 @@ function toggleNews(id) {{
     btn.href = '#';
     btn.id   = 'canyon-refresh-btn';
     btn.textContent = '⟳ Refresh Now';
-    btn.style.cssText = 'margin-left:auto;font-size:12px;color:#B8943F;font-weight:700;padding:5px 14px;border:1px solid #B8943F;border-radius:3px;text-decoration:none;align-self:center';
+    btn.style.cssText = 'margin-left:auto;font-size:12px;color:#c8b487;font-weight:400;padding:5px 14px;border:1px solid #c8b487;border-radius:3px;text-decoration:none;align-self:center';
     btn.onclick = function(e) {{
       e.preventDefault();
       fetch('/refresh').then(function() {{
@@ -10559,14 +11620,14 @@ function toggleNews(id) {{
   function lum(c){{ return (0.299*c[0]+0.587*c[1]+0.114*c[2])/255; }}
   function surface(c){{
     var r=c[0],g=c[1],b=c[2], mx=Math.max(r,g,b), mn=Math.min(r,g,b), sat=mx-mn;
-    if(sat < 16) return '#151a24';                 // neutral grey/white
+    if(sat < 16) return '#16140f';                 // neutral grey/white
     if(r>=g && r>=b){{                               // warm dominant
-      if(g > b + 12) return '#2a2109';             // amber / yellow
-      return '#2c1315';                            // red
+      if(g > b + 12) return '#241f16';             // amber / yellow
+      return '#251a17';                            // red
     }}
-    if(g>=r && g>=b) return '#12291c';             // green
-    if(r > g + 8) return '#1e1436';                // purple
-    return '#111d33';                              // blue
+    if(g>=r && g>=b) return '#1c231e';             // green
+    if(r > g + 8) return '#221c26';                // purple
+    return '#1f2321';                              // blue
   }}
   document.querySelectorAll('[style]').forEach(function(el){{
     var s = el.getAttribute('style'); if(!s) return;
@@ -10589,10 +11650,35 @@ function toggleNews(id) {{
 </body>
 </html>"""
     # Inline Chart.js for offline support (replace CDN reference)
+    # + global defaults so every chart reads clearly on the dark theme (Lynn:
+    #   "那些图太暗" — brighter text, visible warm grid, bolder lines).
+    _chart_defaults = (
+        "<script>(function(){if(!window.Chart)return;"
+        "Chart.defaults.color='#d8cdba';"                       # bright tick/legend text
+        "Chart.defaults.borderColor='rgba(200,180,135,0.16)';"  # subtle salmon grid
+        "Chart.defaults.font.size=11;"
+        "if(Chart.defaults.elements){"
+        "Chart.defaults.elements.line.borderWidth=2.6;"          # bolder lines
+        "Chart.defaults.elements.point.radius=0;"
+        "Chart.defaults.elements.point.hoverRadius=4;}"
+        "if(Chart.defaults.plugins&&Chart.defaults.plugins.legend)"
+        "Chart.defaults.plugins.legend.labels.color='#d8cdba';"
+        "})();</script>"
+    )
     _html = _html.replace(
         '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>',
-        f'<script>{_CHARTJS_JS}</script>'
+        f'<script>{_CHARTJS_JS}</script>{_chart_defaults}'
     )
+    # Brighten the very-dark grid lines / tick colors baked into individual charts
+    # so the chart structure is visible on the warm-dark cards.
+    for _dark, _bright in (
+        ("grid:{{color:'#2a231b'}}", "grid:{{color:'rgba(200,180,135,0.14)'}}"),
+        ("grid:{{color:'#241f18'}}", "grid:{{color:'rgba(200,180,135,0.14)'}}"),
+        ("grid:{{color:'#241f18'}}", "grid:{{color:'rgba(200,180,135,0.14)'}}"),
+        ("color:'#BBB'", "color:'#b7ab99'"),
+        ("color:'#8a7f70'}},grid:{{color:'#2a231b'}}", "color:'#b7ab99'}},grid:{{color:'rgba(200,180,135,0.14)'}}"),
+    ):
+        _html = _html.replace(_dark.replace("{{", "{").replace("}}", "}"), _bright.replace("{{", "{").replace("}}", "}"))
     return _html
 
 # ── main ─────────────────────────────────────────────────────────────────────

@@ -1246,20 +1246,33 @@ def apply_earnings_risk_gate(
     Reads: earnings_calendar.csv (produced by step102)
     Saves: earnings_gate_today.csv (gate action log)
     """
+    _EGT_COLS = ["ticker", "action", "earnings_risk", "days_until", "date"]
+    def _write_empty_gate():
+        try:
+            pd.DataFrame(columns=_EGT_COLS).to_csv(ROOT / "earnings_gate_today.csv", index=False)
+        except Exception:
+            pass
+
     ec_path = ROOT / "earnings_calendar.csv"
     if not ec_path.exists():
         print("  [EarningsGate] earnings_calendar.csv not found — skipping gate")
+        _write_empty_gate()
         return composite_df, {"gated": 0, "penalized": 0, "missing_file": True}
 
     try:
         ec = pd.read_csv(ec_path)
+        # accept risk_flag as an alias for earnings_risk (schema drift)
+        if "earnings_risk" not in ec.columns and "risk_flag" in ec.columns:
+            ec = ec.rename(columns={"risk_flag": "earnings_risk"})
         if "ticker" not in ec.columns or "earnings_risk" not in ec.columns:
             print("  [EarningsGate] earnings_calendar.csv missing required columns")
+            _write_empty_gate()
             return composite_df, {"gated": 0, "penalized": 0}
 
         ec = ec.set_index("ticker")
     except Exception as exc:
         print(f"  [EarningsGate] Failed to load: {exc}")
+        _write_empty_gate()
         return composite_df, {"gated": 0, "penalized": 0}
 
     df = composite_df.copy()
@@ -1306,12 +1319,15 @@ def apply_earnings_risk_gate(
         print(f"  [EarningsGate] Penalized {len(penalized):2d} MEDIUM/LOW tickers: "
               f"{', '.join(penalized[:5])}{'...' if len(penalized)>5 else ''}")
 
-    # Save gate log
-    if log_rows:
-        try:
+    # Save gate log — always write (empty-but-headed) so the dashboard has a file
+    try:
+        if log_rows:
             pd.DataFrame(log_rows).to_csv(ROOT / "earnings_gate_today.csv", index=False)
-        except Exception:
-            pass
+        else:
+            pd.DataFrame(columns=["ticker", "action", "earnings_risk", "days_until", "date"]) \
+                .to_csv(ROOT / "earnings_gate_today.csv", index=False)
+    except Exception:
+        pass
 
     return df, {
         "gated":     len(gated),
@@ -1588,6 +1604,18 @@ def main() -> None:
             **{f"post_{k}": v for k,v in fn_report.get("post_exposures",{}).items()},
             "n_swaps": fn_report.get("n_swaps_total", 0),
         }]).to_csv(ROOT / "factor_neutralization_today.csv", index=False)
+
+    # Always emit factor_neutralization_today.csv. The MVO success path handles
+    # neutralization internally (no greedy swaps), so record a status row there.
+    if _opt_weights is not None:
+        try:
+            pd.DataFrame([{
+                "date": TODAY, "method": "MVO_BARRA",
+                "n_long": len(top_long), "n_short": len(top_short),
+                "n_swaps": 0, "note": "Factor exposures neutralized by MVO optimizer.",
+            }]).to_csv(ROOT / "factor_neutralization_today.csv", index=False)
+        except Exception:
+            pass
 
     # ── CVaR gate: remove names with tail risk > 9% ──
     print("\n  [3b] CVaR risk gate …")

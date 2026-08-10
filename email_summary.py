@@ -89,12 +89,26 @@ def _read_daily_report(date_str: str) -> dict:
     m = re.search(r"Macro Overlay:\s+\*\*(.+?)\*\*", txt)
     if m: result["macro"] = m.group(1)
 
-    # Parse long table rows: | 1 | **MU** | +2.604 | $949.28 | ...
-    for match in re.finditer(r"\|\s*(\d+)\s*\|\s*\*\*(\w+)\*\*\s*\|\s*([\+\-\d\.]+)", txt):
-        rank, ticker, score = int(match.group(1)), match.group(2), match.group(3)
-        # Only capture first 8 longs
-        if rank <= 8 and len(result["longs"]) < 8:
-            result["longs"].append({"rank": rank, "ticker": ticker, "score": score})
+    # Long/short books: read from the clean ranked CSVs (daily_picks / daily_shorts),
+    # NOT the markdown table (which can carry nan scores + alphabetical/garbage tickers).
+    try:
+        import pandas as _pd
+        dp = _pd.read_csv(ROOT / "daily_picks.csv")
+        dp = dp[dp["ticker"].astype(str).str.fullmatch(r"[A-Z][A-Z.\-]{0,6}")]
+        for i, (_, row) in enumerate(dp.head(8).iterrows(), start=1):
+            z = (float(row.get("alpha_score", 50)) - 50) / 25.0
+            result["longs"].append({"rank": i, "ticker": str(row["ticker"]), "score": f"{z:+.2f}"})
+    except Exception:
+        pass
+    try:
+        import pandas as _pd
+        ds = _pd.read_csv(ROOT / "daily_shorts.csv")
+        ds = ds[ds["ticker"].astype(str).str.fullmatch(r"[A-Z][A-Z.\-]{0,6}")]
+        for i, (_, row) in enumerate(ds.head(8).iterrows(), start=1):
+            z = (float(row.get("alpha_score", 50)) - 50) / 25.0
+            result["shorts"].append({"rank": i, "ticker": str(row["ticker"]), "score": f"{z:+.2f}"})
+    except Exception:
+        pass
 
     # Signal changes
     m = re.search(r"NEW LONG:\s+(.+)", txt)
@@ -182,7 +196,10 @@ def build_html_email(date_str: str, report: dict, alerts: dict, nav: dict) -> st
     # Longs table rows
     long_rows = ""
     for r in report["longs"][:5]:
-        sc = float(r["score"]) if r["score"] not in ("nan","—") else 0
+        try:
+            sc = float(r["score"])
+        except (ValueError, TypeError):
+            sc = 0.0
         sc_color = _COLOR["bull"] if sc > 0 else _COLOR["bear"]
         long_rows += f"""
         <tr>

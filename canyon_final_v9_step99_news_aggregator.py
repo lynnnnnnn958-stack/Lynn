@@ -59,12 +59,14 @@ F_REGIME_SCORES = ROOT / "regime_ml_scores.csv"
 # [1/3] Universe loader
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_universe(top_n: int) -> list[str]:
+def load_universe(top_n: int, source: str = "auto") -> list[str]:
     """
     Load top N tickers from the first available source:
       1. daily_picks.csv   — alpha_score descending
       2. alpha_scores.csv  — alpha_rank ascending
       3. regime_ml_scores.csv — predicted_score descending
+    source="alpha" skips daily_picks to pull the full S&P 500 universe (broad
+    news coverage for the event-detection layer). source="auto" = original order.
     Returns a deduplicated list of uppercase ticker strings.
     """
     def _try_daily_picks() -> list[str] | None:
@@ -114,11 +116,14 @@ def load_universe(top_n: int) -> list[str]:
             print(f"  [WARN] Could not load regime_ml_scores.csv: {exc}")
             return None
 
-    for loader, label in [
-        (_try_daily_picks,   "daily_picks.csv"),
-        (_try_alpha_scores,  "alpha_scores.csv"),
-        (_try_regime_scores, "regime_ml_scores.csv"),
-    ]:
+    if source in ("alpha", "sp500"):
+        loaders = [(_try_alpha_scores, "alpha_scores.csv"),
+                   (_try_regime_scores, "regime_ml_scores.csv")]
+    else:
+        loaders = [(_try_daily_picks, "daily_picks.csv"),
+                   (_try_alpha_scores, "alpha_scores.csv"),
+                   (_try_regime_scores, "regime_ml_scores.csv")]
+    for loader, label in loaders:
         result = loader()
         if result:
             print(f"  [OK]  Universe loaded from {label}: {len(result)} tickers")
@@ -502,6 +507,7 @@ def run(
     max_items: int = 8,
     force: bool = False,
     max_workers: int = 8,
+    source: str = "auto",
 ) -> int:
     """
     Main entry:
@@ -544,7 +550,7 @@ def run(
     # ── 2. Load universe ─────────────────────────────────────────────────────
     print()
     print("[2/3] Loading universe")
-    tickers = load_universe(top_n)
+    tickers = load_universe(top_n, source=source)
     if not tickers:
         print("  [ERROR] No tickers to fetch. Exiting with 0 (non-fatal).")
         return 0
@@ -619,6 +625,11 @@ def _parse_args() -> argparse.Namespace:
         "--workers", type=int, default=8, metavar="N",
         help="ThreadPoolExecutor max_workers (default: 8)",
     )
+    parser.add_argument(
+        "--source", choices=["auto", "alpha", "sp500"], default="auto",
+        help="Universe source: 'auto' (daily_picks first) or 'alpha'/'sp500' "
+             "(skip daily_picks → full S&P 500 for broad news coverage)",
+    )
     return parser.parse_args()
 
 
@@ -630,5 +641,6 @@ if __name__ == "__main__":
             max_items=args.max_items,
             force=args.force,
             max_workers=args.workers,
+            source=args.source,
         )
     )

@@ -540,8 +540,18 @@ def main() -> None:
     print("\n[1/5] Loading base data …")
     prices = pd.read_csv(ROOT / "backtest_price_cache.csv",
                          index_col=0, parse_dates=True)
-    preds  = pd.read_csv(ROOT / "cpcv_predictions.csv",
-                         parse_dates=["rebalance_date"])
+    # Factor IC needs a HISTORICAL rebalance schedule (many dates). cpcv_predictions
+    # is a single-day snapshot; wf_oos_predictions is the multi-year panel. Pick the
+    # one with the most rebalance dates so IC isn't computed on a single cross-section.
+    preds = pd.DataFrame()
+    _best = 0
+    for _f in ("wf_oos_predictions.csv", "cpcv_predictions.csv"):
+        _p = ROOT / _f
+        if _p.exists():
+            _df = pd.read_csv(_p, parse_dates=["rebalance_date"])
+            _n = _df["rebalance_date"].nunique() if "rebalance_date" in _df.columns else 0
+            if _n > _best:
+                preds, _best = _df, _n
     tickers   = [c for c in prices.columns if c != "SPY"]
     reb_dates = sorted(preds["rebalance_date"].dt.date.unique().astype(str).tolist())
     print(f"  {len(tickers)} tickers  ·  {len(reb_dates)} rebalance dates")

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-CANYON v9 Step 24 — Option Pin / Dealer "Kill Zone" Risk Layer
+CANYON v9 Step 24 - Option Pin / Dealer "Kill Zone" Risk Layer
 
 Purpose:
-Converts “market-maker option kill / premium kill / pinning / IV crush / theta bleed”
+Converts "market-maker option kill / premium kill / pinning / IV crush / theta bleed"
 into a pre-trade risk check layer.
 
 Important notes:
-- This does not mean market makers intentionally “kill retail options.”
+- This does not mean market makers intentionally "kill retail options."
 - More precisely: options market structure, dealer hedging, expiry dates, OI concentration, IV decline,
   bid-ask and time-value decay create an environment where long option buyers frequently lose.
 
@@ -380,7 +380,7 @@ def md_table(df: pd.DataFrame, max_rows=30) -> str:
 
 
 def no_data_report() -> str:
-    return """# Canyon v9 Step 24 — Option Pin / Dealer Kill Zone Risk
+    return """# Canyon v9 Step 24 - Option Pin / Dealer Kill Zone Risk
 
 ## Status: NO OPTIONS CHAIN DATA
 
@@ -393,11 +393,11 @@ No `options_chain_snapshot.csv` found; cannot compute:
 - IV crush / theta bleed risk
 - option kill zone score
 
-This is not a code failure — the system has no option chain data. Run Step 23 first and provide a Polygon API key or manual `options_chain_input.csv`.
+This is not a code failure - the system has no option chain data. Run Step 23 first and provide a Polygon API key or manual `options_chain_input.csv`.
 
 ## What does this layer solve?
 
-What is commonly called “market-maker option kill” breaks down into several distinct mechanisms:
+What is commonly called "market-maker option kill" breaks down into several distinct mechanisms:
 
 1. **Pinning / Max pain effect**  
    Before expiry, price may oscillate around high-OI strikes while short-dated option buyers lose to theta decay.
@@ -425,13 +425,13 @@ Do not state gamma/market-maker logic as definitive conclusions. Wait for real o
 
 def build_report(df: pd.DataFrame) -> str:
     md = []
-    md.append("# Canyon v9 Step 24 — Option Pin / Dealer Kill Zone Risk")
+    md.append("# Canyon v9 Step 24 - Option Pin / Dealer Kill Zone Risk")
     md.append("")
     md.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     md.append("")
     md.append("## Concept")
     md.append("")
-    md.append(“Do not treat 'market-maker option kill' as conspiratorial manipulation. A more tradeable framing: options structure, OI distribution, expiry dates, IV, bid-ask, theta, and dealer hedging collectively create an environment where long option buyers frequently lose.”)
+    md.append("Do not treat 'market-maker option kill' as conspiratorial manipulation. A more tradeable framing: options structure, OI distribution, expiry dates, IV, bid-ask, theta, and dealer hedging collectively create an environment where long option buyers frequently lose.")
     md.append("")
     md.append("## Risk Table")
     md.append("")
@@ -443,7 +443,7 @@ def build_report(df: pd.DataFrame) -> str:
     md.append("- MEDIUM_OPTION_KILL_ZONE: reduce position size, avoid weekly OTM call/put, check IV and spread.")
     md.append("- Max pain is an OI-based proxy only, not a guarantee of where price goes.")
     md.append("- OI cannot prove actual dealer long/short gamma positioning.")
-    md.append(“- If both Gamma Squeeze Watch and Kill Zone appear simultaneously, interpret as 'may accelerate or may be pinned' — wait for price confirmation.”)
+    md.append("- If both Gamma Squeeze Watch and Kill Zone appear simultaneously, interpret as 'may accelerate or may be pinned' - wait for price confirmation.")
     md.append("")
     return "\n".join(md)
 

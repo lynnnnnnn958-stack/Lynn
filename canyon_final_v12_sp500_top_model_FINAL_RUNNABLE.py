@@ -1145,7 +1145,7 @@ class DrawdownController:
     def scale_weights(self, weights: pd.Series) -> pd.Series:
         sc = self.position_scale()
         if sc < 1.0:
-pass  # silence output — too frequent in backtests
+            pass  # silence output — too frequent in backtests
         return weights * sc
 
 
@@ -1715,7 +1715,7 @@ class StrategyMonitor:
             return True, f"Rolling Sharpe {sr:.3f} < -0.5"
         if self.losing_streak():
             return True, f"{self.losing_streak_n} consecutive losing days"
-return False, "normal"
+        return False, "normal"
 
     def status_report(self) -> Dict:
         broken, reason = self.is_broken()
