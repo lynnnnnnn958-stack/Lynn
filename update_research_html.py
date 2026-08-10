@@ -4996,6 +4996,115 @@ def _intraday_panel() -> str:
     </div>"""
 
 
+def _ten_layer_matrix_panel() -> str:
+    """The Canyon 10-layer decision matrix — for each name, where every layer L1..L10
+    stands, plus the master action & reason. From master_10_layer_decision_matrix.csv."""
+    p = ROOT / "master_10_layer_decision_matrix.csv"
+    if not p.exists():
+        return ""
+    try:
+        df = pd.read_csv(p)
+    except Exception:
+        return ""
+    if df.empty or "ticker" not in df.columns:
+        return ""
+    import html as _h
+    def _esc(s): return _h.escape(str(s)) if s is not None else ""
+    C_CARD, C_INK, C_MUTE, C_SUB, C_GOLD = "#16140f", "#f0e9da", "#8f866f", "#b0a68f", "#c8b487"
+    # status → color
+    def _scol(v):
+        v = str(v).upper()
+        if v in ("OK", "CLEAR", "PASS", "READY", "GREEN"): return "#8faa9a"
+        if v in ("PARTIAL", "WAIT", "PENDING_MANUAL_CHECKS", "PAPER_ONLY"): return "#cdbd8f"
+        if v in ("BLOCKED", "RED"): return "#c68b83"
+        return "#4a4433"  # NO_DATA / SKIP / TRACE / ALREADY_CLOSED / other = dim
+    LAYERS = [("L1_data", "L1"), ("L2_macro", "L2"), ("L3_sector", "L3"), ("L4_fundamental", "L4"),
+              ("L5_event", "L5"), ("L6_price", "L6"), ("L7_options", "L7"), ("L8_risk", "L8"),
+              ("L9_execution", "L9"), ("L10_learning", "L10")]
+    head_cells = "".join(f'<th style="padding:5px 6px;font-size:9px;color:{C_MUTE};font-weight:400;text-align:center">{lbl}</th>' for _, lbl in LAYERS)
+    body = ""
+    for _, r in df.iterrows():
+        tk = _esc(str(r.get("ticker", "")))
+        cells = ""
+        for col, _lbl in LAYERS:
+            v = str(r.get(col, ""))
+            c = _scol(v)
+            cells += f'<td title="{_esc(v)}" style="padding:4px;text-align:center"><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:{c}"></span></td>'
+        action = _esc(str(r.get("master_action", "")))
+        reason = _esc(str(r.get("master_reason", ""))[:90])
+        body += (f'<tr style="border-top:1px solid #241f18">'
+                 f'<td style="padding:6px 8px;font-size:12.5px;color:{C_GOLD};font-weight:400;white-space:nowrap">{tk}</td>'
+                 f'{cells}'
+                 f'<td style="padding:6px 8px;font-size:10.5px;color:{C_SUB};white-space:nowrap">{action}</td></tr>')
+    legend = ('<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:10px;color:#8f866f;margin-top:10px">'
+              '<span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#8faa9a"></span> clear</span>'
+              '<span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#cdbd8f"></span> partial/wait</span>'
+              '<span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#c68b83"></span> blocked</span>'
+              '<span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#4a4433"></span> no data</span></div>')
+    return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;border-radius:8px;padding:18px 20px">'
+            f'<div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">10-Layer Decision Matrix</div>'
+            f'<div style="font-size:19px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK};margin-bottom:6px">Every layer, every name — where the build actually stands</div>'
+            f'<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:640px">'
+            f'<thead><tr><th style="padding:5px 8px;font-size:9px;color:{C_MUTE};font-weight:400;text-align:left">Name</th>{head_cells}'
+            f'<th style="padding:5px 8px;font-size:9px;color:{C_MUTE};font-weight:400;text-align:left">Master action</th></tr></thead>'
+            f'<tbody>{body}</tbody></table></div>{legend}'
+            f'<div style="font-size:10px;color:{C_MUTE};margin-top:8px">L1 Data · L2 Macro · L3 Sector · L4 Fundamental · L5 Event · L6 Price · L7 Options · L8 Risk · L9 Execution · L10 Learning</div>'
+            f'</div>')
+
+
+def _research_memo_panel() -> str:
+    """Per-name research memos — verdict, what it is, why it matters, what would change
+    my mind, and the multi-horizon view. From ticker_research_memo.csv."""
+    p = ROOT / "ticker_research_memo.csv"
+    if not p.exists():
+        return ""
+    try:
+        df = pd.read_csv(p)
+    except Exception:
+        return ""
+    if df.empty or "ticker" not in df.columns:
+        return ""
+    import html as _h
+    def _esc(s): return _h.escape(str(s)) if s is not None else ""
+    C_CARD, C_INK, C_MUTE, C_SUB = "#16140f", "#f0e9da", "#8f866f", "#b0a68f"
+    C_GOLD, C_POS, C_NEG = "#c8b487", "#8faa9a", "#c68b83"
+    try:
+        df = df.sort_values("memo_rank")
+    except Exception:
+        pass
+    rows = ""
+    for _, r in df.head(12).iterrows():
+        tk     = _esc(str(r.get("ticker", "")))
+        verdict = _esc(str(r.get("current_verdict", ""))[:200])
+        status = str(r.get("memo_status", ""))
+        v_col  = C_NEG if ("block" in status.lower() or "block" in verdict.lower()) else C_POS
+        whatis = _esc(str(r.get("what_is_this", ""))[:160])
+        whym   = _esc(str(r.get("why_it_matters", ""))[:180])
+        says   = _esc(str(r.get("what_source_says", ""))[:200])
+        change = _esc(str(r.get("what_would_change_my_mind", ""))[:180])
+        st     = _esc(str(r.get("short_term_view", ""))[:90])
+        mt     = _esc(str(r.get("medium_term_view", ""))[:90])
+        lt     = _esc(str(r.get("long_term_view", ""))[:90])
+        def _line(lbl, txt, col=C_SUB):
+            return (f'<div style="font-size:11.5px;color:{col};line-height:1.5;margin-top:3px"><b style="color:#a89c8c">{lbl}:</b> {txt}</div>'
+                    if txt and txt != "nan" else "")
+        horizons = ""
+        if any(x and x != "nan" for x in (st, mt, lt)):
+            horizons = (f'<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:10.5px;color:{C_MUTE};margin-top:5px">'
+                        f'<span><b style="color:#a89c8c">ST</b> {st}</span><span><b style="color:#a89c8c">MT</b> {mt}</span><span><b style="color:#a89c8c">LT</b> {lt}</span></div>')
+        rows += (f'<div style="padding:13px 0;border-top:1px solid #241f18">'
+                 f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">'
+                 f'<span style="font-size:15px;color:{C_GOLD};font-family:\'Baskerville\',Georgia,serif">{tk}</span>'
+                 f'<span style="font-size:10px;color:{v_col};text-transform:uppercase;letter-spacing:.06em">{_esc(status)}</span></div>'
+                 f'<div style="font-size:12px;color:{C_INK};line-height:1.5;margin-top:3px">{verdict}</div>'
+                 + _line("What", whatis) + _line("Why it matters", whym) + _line("Source says", says)
+                 + _line("Would change my mind", change, C_POS) + horizons + '</div>')
+    return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;border-radius:8px;padding:18px 20px">'
+            f'<div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">Research Memos</div>'
+            f'<div style="font-size:19px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK};margin-bottom:6px">The written case per name — and what would change it</div>'
+            f'{rows}</div>')
+
+
 def _morning_brief_panel() -> str:
     """The desk's daily executive answer — read before looking at any ticker.
     Surfaces pm_morning_brief_cards.csv (card / value / why_it_matters / color)."""
@@ -6012,10 +6121,12 @@ def _build_event_engine_tab() -> str:
     </div>
     {_intraday_panel()}
     {_morning_brief_panel()}
+    {_ten_layer_matrix_panel()}
     {_macro_deep_panel()}
     {_fred_macro_panel()}
     {_sector_theme_panel()}
     {_strategy_thesis_panel()}
+    {_research_memo_panel()}
     {_news_deep_panel()}
     {_alphavantage_news_panel()}
     {intel_html}
