@@ -4996,6 +4996,271 @@ def _intraday_panel() -> str:
     </div>"""
 
 
+def _morning_brief_panel() -> str:
+    """The desk's daily executive answer — read before looking at any ticker.
+    Surfaces pm_morning_brief_cards.csv (card / value / why_it_matters / color)."""
+    p = ROOT / "pm_morning_brief_cards.csv"
+    if not p.exists():
+        return ""
+    try:
+        df = pd.read_csv(p)
+    except Exception:
+        return ""
+    if df.empty:
+        return ""
+    import html as _h
+    def _esc(s): return _h.escape(str(s)) if s is not None else ""
+    C_CARD, C_INK, C_SUB, C_GOLD = "#16140f", "#f0e9da", "#b0a68f", "#c8b487"
+    CMAP = {"red": "#c68b83", "green": "#8faa9a", "amber": "#cdbd8f", "yellow": "#cdbd8f",
+            "orange": "#cdbd8f", "blue": "#8fa8d8", "gray": "#8f866f", "grey": "#8f866f"}
+    cards = ""
+    for _, r in df.iterrows():
+        col   = CMAP.get(str(r.get("color", "")).strip().lower(), C_GOLD)
+        card  = _esc(str(r.get("card", "")))
+        val   = _esc(str(r.get("value", "")))
+        why   = _esc(str(r.get("why_it_matters", "")))
+        cards += (f'<div style="padding:13px 16px;border-left:3px solid {col};background:#14110b;border-radius:6px;margin-bottom:8px">'
+                  f'<div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:{col};margin-bottom:3px">{card}</div>'
+                  f'<div style="font-size:14px;color:{C_INK};line-height:1.5;margin-bottom:3px">{val}</div>'
+                  f'<div style="font-size:11.5px;color:{C_SUB};line-height:1.45">{why}</div></div>')
+    return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;border-radius:8px;padding:18px 20px">'
+            f'<div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">PM Morning Brief</div>'
+            f'<div style="font-size:19px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK};margin-bottom:10px">The desk answer — read this first</div>'
+            f'{cards}</div>')
+
+
+def _sector_theme_panel() -> str:
+    """Sector / theme depth — ranked cycle theses with stance, score, evidence,
+    the risk against it, and the next research question. From sector_theme_depth_thesis.csv."""
+    p = ROOT / "sector_theme_depth_thesis.csv"
+    if not p.exists():
+        return ""
+    try:
+        df = pd.read_csv(p)
+    except Exception:
+        return ""
+    if df.empty or "cycle_thesis" not in df.columns:
+        return ""
+    import html as _h
+    def _esc(s): return _h.escape(str(s)) if s is not None else ""
+    C_CARD, C_INK, C_MUTE, C_SUB = "#16140f", "#f0e9da", "#8f866f", "#b0a68f"
+    C_GOLD, C_POS, C_NEG = "#c8b487", "#8faa9a", "#c68b83"
+    try:
+        df = df.sort_values("thesis_score_0_100", ascending=False)
+    except Exception:
+        pass
+    rows = ""
+    for _, r in df.head(10).iterrows():
+        theme = _esc(str(r.get("theme_or_subsector", "")))
+        stance = _esc(str(r.get("stance", "")))
+        thesis = _esc(str(r.get("cycle_thesis", "")))
+        try:
+            sc = float(r.get("thesis_score_0_100", 0))
+        except Exception:
+            sc = 0.0
+        sc_col = C_POS if sc >= 66 else (C_GOLD if sc >= 40 else C_NEG)
+        evid = _esc(str(r.get("supporting_evidence", ""))[:200])
+        risk = _esc(str(r.get("contradiction_or_risk", ""))[:160])
+        nextq = _esc(str(r.get("next_research_question", ""))[:140])
+        r20 = r.get("avg_ret_20d_pct", ""); r63 = r.get("avg_ret_63d_pct", "")
+        perf = ""
+        try:
+            perf = f'<span style="color:{C_MUTE};font-size:11px">20d {float(r20):+.1f}% · 63d {float(r63):+.1f}%</span>'
+        except Exception:
+            pass
+        rows += (f'<div style="padding:13px 0;border-top:1px solid #241f18">'
+                 f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px">'
+                 f'<span style="font-size:13.5px;color:{C_INK}">{theme}</span>'
+                 f'<span style="font-size:13px;color:{sc_col};font-variant-numeric:tabular-nums">{sc:.0f}<span style="font-size:10px;color:{C_MUTE}">/100</span></span></div>'
+                 f'<div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:{C_GOLD};margin:2px 0 4px">{stance} · {perf}</div>'
+                 f'<div style="font-size:12px;color:{C_SUB};line-height:1.5">{thesis}</div>'
+                 f'<div style="font-size:11px;color:{C_MUTE};margin-top:4px;line-height:1.45"><b style="color:#a89c8c">Evidence:</b> {evid}</div>'
+                 + (f'<div style="font-size:11px;color:{C_NEG};margin-top:2px;line-height:1.45"><b>Risk:</b> {risk}</div>' if risk and risk != "nan" else "")
+                 + (f'<div style="font-size:11px;color:{C_MUTE};margin-top:2px"><b style="color:#a89c8c">Next:</b> {nextq}</div>' if nextq and nextq != "nan" else "")
+                 + '</div>')
+    return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;border-radius:8px;padding:18px 20px">'
+            f'<div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">Sector / Theme Depth</div>'
+            f'<div style="font-size:19px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK};margin-bottom:6px">Where the cycle favors capital — and the risk against each</div>'
+            f'{rows}</div>')
+
+
+def _strategy_thesis_panel() -> str:
+    """Per-name strategy thesis with the four scenarios (base / bull / bear / no-trade),
+    conviction, horizon, and the trigger to watch. From institutional_strategy_thesis_board.csv."""
+    p = ROOT / "institutional_strategy_thesis_board.csv"
+    if not p.exists():
+        return ""
+    try:
+        df = pd.read_csv(p)
+    except Exception:
+        return ""
+    if df.empty or "current_strategy_thesis" not in df.columns:
+        return ""
+    import html as _h
+    def _esc(s): return _h.escape(str(s)) if s is not None else ""
+    C_CARD, C_INK, C_MUTE, C_SUB = "#16140f", "#f0e9da", "#8f866f", "#b0a68f"
+    C_GOLD, C_POS, C_NEG, C_WARN = "#c8b487", "#8faa9a", "#c68b83", "#cdbd8f"
+    try:
+        df = df.sort_values("thesis_quality_score", ascending=False)
+    except Exception:
+        pass
+    rows = ""
+    for _, r in df.head(12).iterrows():
+        tk    = _esc(str(r.get("ticker", "")))
+        sleeve = _esc(str(r.get("strategy_sleeve", "")))
+        posture = _esc(str(r.get("strategy_posture", "")))
+        conv   = _esc(str(r.get("conviction_tier", "")))
+        horizon = _esc(str(r.get("best_horizon", "")))
+        thesis = _esc(str(r.get("current_strategy_thesis", ""))[:260])
+        base = _esc(str(r.get("base_case", ""))[:160])
+        bull = _esc(str(r.get("bull_case", ""))[:150])
+        bear = _esc(str(r.get("bear_case", ""))[:150])
+        trig = _esc(str(r.get("trigger_to_watch", ""))[:160])
+        p_col = C_NEG if ("de-risk" in posture.lower() or "preserv" in posture.lower()) else (C_POS if ("add" in posture.lower() or "accumulat" in posture.lower()) else C_GOLD)
+        def _case(lbl, txt, col):
+            return (f'<div style="font-size:11px;color:{C_SUB};line-height:1.45;margin-top:2px"><b style="color:{col}">{lbl}:</b> {txt}</div>'
+                    if txt and txt != "nan" else "")
+        rows += (f'<div style="padding:13px 0;border-top:1px solid #241f18">'
+                 f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">'
+                 f'<span style="font-size:15px;color:{C_GOLD};font-family:\'Baskerville\',Georgia,serif">{tk}</span>'
+                 f'<span style="font-size:10px;color:{p_col};text-transform:uppercase;letter-spacing:.06em">{posture}</span></div>'
+                 f'<div style="font-size:10px;color:{C_MUTE};margin:1px 0 5px">{sleeve} · {conv} · best horizon {horizon}</div>'
+                 f'<div style="font-size:12px;color:{C_INK};line-height:1.5">{thesis}</div>'
+                 + _case("Base", base, C_MUTE) + _case("Bull", bull, C_POS) + _case("Bear", bear, C_NEG)
+                 + (f'<div style="font-size:11px;color:{C_WARN};margin-top:3px"><b>Watch:</b> {trig}</div>' if trig and trig != "nan" else "")
+                 + '</div>')
+    return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;border-radius:8px;padding:18px 20px">'
+            f'<div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">Strategy Thesis Board</div>'
+            f'<div style="font-size:19px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK};margin-bottom:6px">Every name\'s case — base, bull, bear, and what would change it</div>'
+            f'{rows}</div>')
+
+
+def _macro_deep_panel() -> str:
+    """Deep macro read — synthesizes the 4-week regime outlook into a written thesis:
+    per-signal value, trend, plain-English interpretation, and the trigger to watch.
+    Turns the rich-but-buried macro_regime_outlook.json into an analyst-style read."""
+    p = ROOT / "macro_regime_outlook.json"
+    if not p.exists():
+        return ""
+    try:
+        d = json.load(open(p))
+    except Exception:
+        return ""
+    import html as _h
+    def _esc(s): return _h.escape(str(s)) if s is not None else ""
+
+    C_CARD, C_INK, C_MUTE, C_SUB = "#16140f", "#f0e9da", "#8f866f", "#b0a68f"
+    C_GOLD, C_POS, C_NEG, C_WARN = "#c8b487", "#8faa9a", "#c68b83", "#cdbd8f"
+
+    comp    = d.get("composite", {})
+    bp      = comp.get("bear_prob")
+    label   = str(comp.get("label", ""))
+    delta   = comp.get("bear_prob_delta")
+    signals = d.get("signals", {})
+    as_of   = _esc(str(d.get("as_of", "")))
+
+    hp_col = C_POS if (bp is not None and bp < 25) else (C_WARN if (bp is not None and bp < 50) else C_NEG)
+    delta_txt = ""
+    if delta is not None:
+        d_col   = C_POS if delta < 0 else (C_NEG if delta > 0 else C_MUTE)
+        d_arrow = "▼" if delta < 0 else ("▲" if delta > 0 else "→")
+        d_word  = "improving" if delta < 0 else ("deteriorating" if delta > 0 else "flat")
+        delta_txt = f'<span style="color:{d_col};font-size:13px"> {d_arrow} {abs(delta):.1f}pp WoW ({d_word})</span>'
+
+    # Synthesize a one-line thesis from the signal scores.
+    ok_sigs  = [s for s in signals.values() if s.get("ok", True)]
+    supportive = [s.get("name", "") for s in ok_sigs
+                  if float(s.get("bear_score", 0)) <= float(s.get("max_score", 2) or 2) * 0.25]
+    watch_now  = [s.get("name", "") for s in ok_sigs
+                  if float(s.get("bear_score", 0)) >= float(s.get("max_score", 2) or 2) * 0.6]
+    thesis = f"{len(supportive)} of {len(ok_sigs)} macro pillars supportive"
+    thesis += f"; the strain is in {', '.join(watch_now)}" if watch_now else "; no pillar is flashing red"
+
+    rows = ""
+    for s in ok_sigs:
+        nm     = _esc(s.get("name", ""))
+        disp   = _esc(s.get("display", str(s.get("value", ""))))
+        trend  = _esc(s.get("trend_label", ""))
+        interp = _esc(s.get("interpretation", ""))
+        watch  = _esc(s.get("watch_for", ""))
+        bs = float(s.get("bear_score", 0)); ms = float(s.get("max_score", 2) or 2)
+        frac = max(0.0, min(1.0, bs / ms))
+        bar_col = C_POS if frac < 0.25 else (C_WARN if frac < 0.6 else C_NEG)
+        rows += (f'<div style="padding:12px 0;border-top:1px solid #241f18">'
+                 f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px">'
+                 f'<span style="font-size:13.5px;color:{C_INK}">{nm}</span>'
+                 f'<span style="font-size:13px;color:{C_GOLD};font-variant-numeric:tabular-nums">{disp} '
+                 f'<span style="color:{C_MUTE};font-size:11px">· {trend}</span></span></div>'
+                 f'<div style="height:3px;background:#241f18;border-radius:2px;margin:7px 0 6px">'
+                 f'<div style="height:3px;width:{frac*100:.0f}%;background:{bar_col};border-radius:2px"></div></div>'
+                 f'<div style="font-size:12px;color:{C_SUB};line-height:1.5">{interp}</div>'
+                 f'<div style="font-size:11px;color:{C_MUTE};margin-top:3px">Watch: {watch}</div></div>')
+
+    bp_disp = f"{bp:.1f}%" if bp is not None else "—"
+    return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;border-radius:8px;padding:18px 20px">'
+            f'<div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">Macro Regime · 4-Week Outlook</div>'
+            f'<div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:4px">'
+            f'<span style="font-size:34px;color:{hp_col};font-family:\'Baskerville\',Georgia,serif;line-height:1">{bp_disp}</span>'
+            f'<span style="font-size:15px;color:{hp_col}">{_esc(label)} · recession-risk (4wk)</span>{delta_txt}</div>'
+            f'<div style="font-size:12.5px;color:{C_SUB};line-height:1.55;margin-bottom:2px">{thesis}. As of {as_of}.</div>'
+            f'{rows}</div>')
+
+
+def _news_deep_panel() -> str:
+    """Deep news read — the highest-impact headlines, each mapped to the holding/
+    universe name it threatens or helps, with the read-through logic. Turns the
+    1000-row news_impact_targets.csv into a digestible 'what's moving & who it hits'."""
+    p = ROOT / "news_impact_targets.csv"
+    if not p.exists():
+        return ""
+    try:
+        df = pd.read_csv(p)
+    except Exception:
+        return ""
+    if df.empty or "headline" not in df.columns:
+        return ""
+    import html as _h
+    def _esc(s): return _h.escape(str(s)) if s is not None else ""
+    C_CARD, C_INK, C_MUTE, C_SUB = "#16140f", "#f0e9da", "#8f866f", "#b0a68f"
+    C_GOLD, C_POS, C_NEG = "#c8b487", "#8faa9a", "#c68b83"
+
+    df = df.copy()
+    df["_imp"] = pd.to_numeric(df.get("impact_score", 0), errors="coerce").fillna(0)
+    df["_abs"] = df["_imp"].abs()
+    df = df.sort_values("_abs", ascending=False).drop_duplicates(subset=["headline"]).head(16)
+
+    rows = ""
+    for _, r in df.iterrows():
+        tone  = str(r.get("market_tone", "")).upper()
+        t_col = C_NEG if "NEG" in tone else (C_POS if "POS" in tone else C_MUTE)
+        head  = _esc(str(r.get("headline", ""))[:150])
+        tgt   = _esc(str(r.get("target_ticker", "")))
+        rel   = _esc(str(r.get("target_relation", "")))
+        logic = _esc(str(r.get("news_logic", ""))[:220])
+        theme = _esc(str(r.get("theme", "") or r.get("target_sector", "")))
+        pub   = _esc(str(r.get("publisher", "")))
+        pubd  = _esc(str(r.get("published", "")))
+        imp   = float(r["_imp"])
+        link  = str(r.get("link", ""))
+        head_html = (f'<a href="{_esc(link)}" target="_blank" style="color:{C_INK};text-decoration:none">{head}</a>'
+                     if link.startswith("http") else head)
+        rows += (f'<div style="padding:12px 0;border-top:1px solid #241f18">'
+                 f'<div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline">'
+                 f'<span style="font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;color:{t_col}">{_esc(tone.title())} · impact {imp:+.0f}</span>'
+                 f'<span style="font-size:10px;color:{C_MUTE}">{theme}</span></div>'
+                 f'<div style="font-size:13px;color:{C_INK};line-height:1.45;margin:4px 0 3px">{head_html}</div>'
+                 f'<div style="font-size:11.5px;color:{C_SUB};line-height:1.5">{logic}</div>'
+                 f'<div style="font-size:11px;color:{C_GOLD};margin-top:3px">&rarr; hits <b>{tgt}</b> ({rel}) '
+                 f'<span style="color:{C_MUTE}">· {pub} {pubd}</span></div></div>')
+
+    n = len(df)
+    return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;border-radius:8px;padding:18px 20px">'
+            f'<div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">News Impact · Read-Through</div>'
+            f'<div style="font-size:19px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK};margin-bottom:4px">What\'s moving — and who it hits</div>'
+            f'<div style="font-size:12px;color:{C_SUB};margin-bottom:2px">Top {n} highest-impact stories, each mapped to the name it threatens or helps, with the read-through logic — not just a headline list.</div>'
+            f'{rows}</div>')
+
+
 def _alphavantage_news_panel() -> str:
     """Alpha Vantage market news sentiment (free-tier NEWS_SENTIMENT, 1 call/day).
     Honest states: not-enabled (no key), error (rate-limit/network), or live feed."""
@@ -5746,7 +6011,12 @@ def _build_event_engine_tab() -> str:
       </div>
     </div>
     {_intraday_panel()}
+    {_morning_brief_panel()}
+    {_macro_deep_panel()}
     {_fred_macro_panel()}
+    {_sector_theme_panel()}
+    {_strategy_thesis_panel()}
+    {_news_deep_panel()}
     {_alphavantage_news_panel()}
     {intel_html}
     {src_html}
