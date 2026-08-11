@@ -5316,9 +5316,10 @@ def _macro_deep_panel() -> str:
 
 
 def _news_deep_panel() -> str:
-    """Deep news read — the highest-impact headlines, each mapped to the holding/
-    universe name it threatens or helps, with the read-through logic. Turns the
-    1000-row news_impact_targets.csv into a digestible 'what's moving & who it hits'."""
+    """Deep news read — top stories by daily value (recency x impact x model-alpha),
+    each with source + read-through + the name it hits. Filterable by 'my holdings'
+    and by sector. Reads news_impact_targets.csv + holdings from paper book/picks."""
+    import datetime as _dt, urllib.parse as _up, json as _json, html as _h
     p = ROOT / "news_impact_targets.csv"
     if not p.exists():
         return ""
@@ -5328,32 +5329,59 @@ def _news_deep_panel() -> str:
         return ""
     if df.empty or "headline" not in df.columns:
         return ""
-    import html as _h
     def _esc(s): return _h.escape(str(s)) if s is not None else ""
     C_CARD, C_INK, C_MUTE, C_SUB = "#16140f", "#f0e9da", "#8f866f", "#b0a68f"
     C_GOLD, C_POS, C_NEG = "#c8b487", "#8faa9a", "#c68b83"
 
-    import datetime as _dt, urllib.parse as _up
+    # holdings = paper book positions + today's picks
+    holds = set()
+    try:
+        _bk = _json.loads((ROOT / "alpaca_book_state.json").read_text())
+        for _b in ("SHORT", "MEDIUM", "LONG"):
+            _pos = _bk.get(_b, {}).get("positions", [])
+            if isinstance(_pos, dict):
+                _pos = list(_pos.keys())
+            for _pp in _pos:
+                _t = _pp if isinstance(_pp, str) else (_pp.get("ticker") or _pp.get("symbol"))
+                if _t:
+                    holds.add(str(_t).upper())
+    except Exception:
+        pass
+    for _f in ("daily_picks.csv", "daily_final.csv"):
+        try:
+            _dp = pd.read_csv(ROOT / _f)
+            for _c in ("ticker", "symbol", "Ticker"):
+                if _c in _dp.columns:
+                    holds |= set(_dp[_c].dropna().astype(str).str.upper())
+                    break
+        except Exception:
+            pass
+
+    def _norm_sector(s):
+        s = str(s or "").strip()
+        m = {"Technology": "Tech", "Information Technology": "Tech",
+             "Consumer Disc": "Consumer", "Consumer Discretionary": "Consumer",
+             "Consumer Staples": "Consumer", "Communication Services": "Comm Svcs",
+             "Aerospace / Space": "Aerospace", "Health Care": "Healthcare"}
+        return m.get(s, s) if s and s != "nan" else "Other"
+
     df = df.copy()
     df["_imp"]   = pd.to_numeric(df.get("impact_score", 0), errors="coerce").fillna(0)
     df["_alpha"] = pd.to_numeric(df.get("alpha_score", 0), errors="coerce").fillna(0)
     df["_pub"]   = pd.to_datetime(df.get("published", ""), errors="coerce")
     _today = pd.Timestamp(_dt.date.today())
     df["_daysago"] = (_today - df["_pub"]).dt.days
-    # Value score per day: recency + impact magnitude + model alpha — so the feed
-    # leads with what's both recent AND consequential, not just loudest.
-    _imp_n    = (df["_imp"].abs() / 5.0).clip(0, 1)
-    _alpha_n  = ((df["_alpha"] - 33.0) / 48.0).clip(0, 1)
-    _rec_n    = (1.0 - df["_daysago"].fillna(30) / 30.0).clip(0, 1)
+    _imp_n   = (df["_imp"].abs() / 5.0).clip(0, 1)
+    _alpha_n = ((df["_alpha"] - 33.0) / 48.0).clip(0, 1)
+    _rec_n   = (1.0 - df["_daysago"].fillna(30) / 30.0).clip(0, 1)
     df["_value"] = 0.42 * _imp_n + 0.30 * _alpha_n + 0.28 * _rec_n
-    df = df.sort_values("_value", ascending=False).drop_duplicates(subset=["headline"]).head(18)
+    df = df.sort_values("_value", ascending=False).drop_duplicates(subset=["headline"]).head(50)
     _latest = df["_pub"].max()
-    _latest_s = _latest.strftime("%b %d") if pd.notna(_latest) else "—"
+    _latest_s = _latest.strftime("%b %d") if pd.notna(_latest) else "-"
 
     def _domain(u):
         try:
-            h = _up.urlparse(u).netloc.replace("www.", "")
-            return h if h else ""
+            return _up.urlparse(u).netloc.replace("www.", "")
         except Exception:
             return ""
 
@@ -5361,50 +5389,80 @@ def _news_deep_panel() -> str:
         if pd.isna(days):
             return ""
         days = int(days)
-        if days <= 0:   return "Today"
-        if days == 1:   return "Yesterday"
-        if days < 7:    return f"{days}d ago"
-        if days < 35:   return f"{days//7}w ago"
+        if days <= 0:  return "Today"
+        if days == 1:  return "Yesterday"
+        if days < 7:   return f"{days}d ago"
+        if days < 35:  return f"{days//7}w ago"
         return f"{days}d ago"
 
+    _secs = df["target_sector"].map(_norm_sector)
+    _sec_counts = _secs.value_counts()
+    _top_secs = [s for s in _sec_counts.index if s != "Other"][:7]
+
     rows = ""
+    n_hold = 0
     for _, r in df.iterrows():
         tone  = str(r.get("market_tone", "")).upper()
         t_col = C_NEG if "NEG" in tone else (C_POS if "POS" in tone else C_MUTE)
         head  = _esc(str(r.get("headline", ""))[:150])
-        tgt   = _esc(str(r.get("target_ticker", "")))
+        tgt   = str(r.get("target_ticker", "")).upper()
         rel   = _esc(str(r.get("target_relation", "")))
         logic = _esc(str(r.get("news_logic", ""))[:230])
         action = _esc(str(r.get("action_hint", ""))[:150])
-        theme = _esc(str(r.get("theme", "") or r.get("target_sector", "")))
+        sec   = _norm_sector(r.get("target_sector"))
         pub   = _esc(str(r.get("publisher", "")).strip() or "source")
         imp   = float(r["_imp"])
         badge = _datebadge(r.get("_daysago"))
         link  = str(r.get("link", ""))
         dom   = _esc(_domain(link))
+        is_hold = 1 if tgt in holds else 0
+        if is_hold:
+            n_hold += 1
+        star = '<span style="color:#c8b487">&#9733;</span> ' if is_hold else ""
         head_html = (f'<a href="{_esc(link)}" target="_blank" style="color:{C_INK};text-decoration:none;border-bottom:1px solid #3a3128">{head}</a>'
                      if link.startswith("http") else head)
-        # Prominent, clickable source attribution (publisher + domain).
-        src_html = (f'<a href="{_esc(link)}" target="_blank" style="color:{C_GOLD};text-decoration:none;font-weight:400">{pub}</a>'
+        src_html = (f'<a href="{_esc(link)}" target="_blank" style="color:{C_GOLD};text-decoration:none">{pub}</a>'
                     if link.startswith("http") else f'<span style="color:{C_GOLD}">{pub}</span>')
         if dom and dom.lower() not in pub.lower():
-            src_html += f'<span style="color:{C_MUTE};font-size:10px"> · {dom}</span>'
-        rows += (f'<div style="padding:13px 0;border-top:1px solid #241f18">'
+            src_html += f'<span style="color:{C_MUTE};font-size:10px"> &middot; {dom}</span>'
+        rows += (f'<div class="cnews-item" data-hold="{is_hold}" data-sec="{_esc(sec)}" style="padding:13px 0;border-top:1px solid #241f18">'
                  f'<div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline">'
-                 f'<span style="font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;color:{t_col}">{_esc(tone.title())} · impact {imp:+.0f}</span>'
-                 f'<span style="font-size:10px;color:{C_MUTE}">{badge}{" · " + theme if theme and theme != "nan" else ""}</span></div>'
-                 f'<div style="font-size:13.5px;color:{C_INK};line-height:1.45;margin:5px 0 3px">{head_html}</div>'
+                 f'<span style="font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;color:{t_col}">{_esc(tone.title())} &middot; impact {imp:+.0f}</span>'
+                 f'<span style="font-size:10px;color:{C_MUTE}">{badge} &middot; {_esc(sec)}</span></div>'
+                 f'<div style="font-size:13.5px;color:{C_INK};line-height:1.45;margin:5px 0 3px">{star}{head_html}</div>'
                  f'<div style="font-size:11px;margin-bottom:4px">Source: {src_html}</div>'
                  f'<div style="font-size:11.5px;color:{C_SUB};line-height:1.5"><b style="color:#a89c8c">Read-through:</b> {logic}</div>'
                  + (f'<div style="font-size:11px;color:{C_SUB};line-height:1.45;margin-top:2px"><b style="color:#a89c8c">Do:</b> {action}</div>' if action and action != "nan" else "")
-                 + f'<div style="font-size:11px;color:{C_GOLD};margin-top:3px">&rarr; hits <b>{tgt}</b> ({rel})</div></div>')
+                 + f'<div style="font-size:11px;color:{C_GOLD};margin-top:3px">&rarr; hits <b>{_esc(tgt)}</b> ({rel})</div></div>')
+
+    def _chip(label, kind, val, active=False):
+        bg = "#2a2418" if active else "transparent"
+        return (f'<button class="cnews-chip" onclick="cnewsFilter(this,\'{kind}\',\'{_esc(val)}\')" '
+                f'style="cursor:pointer;font-size:11px;padding:4px 10px;border-radius:14px;'
+                f'border:1px solid #3a3128;background:{bg};color:#c8b487;letter-spacing:.02em">{label}</button>')
+    chips = _chip("All", "all", "", True) + _chip(f"&#9733; My holdings ({n_hold})", "hold", "1")
+    chips += '<span style="width:1px;height:16px;background:#3a3128;display:inline-block;margin:0 4px"></span>'
+    for s in _top_secs:
+        chips += _chip(f"{s} ({int(_sec_counts.get(s, 0))})", "sec", s)
+
+    _js = ("<script>function cnewsFilter(btn,kind,val){"
+           "var box=btn.closest('.cnews-box');"
+           "box.querySelectorAll('.cnews-chip').forEach(function(c){c.style.background='transparent';});"
+           "btn.style.background='#2a2418';"
+           "box.querySelectorAll('.cnews-item').forEach(function(it){"
+           "var show=true;"
+           "if(kind==='hold'){show=it.getAttribute('data-hold')==='1';}"
+           "else if(kind==='sec'){show=it.getAttribute('data-sec')===val;}"
+           "it.style.display=show?'block':'none';});}</script>")
 
     n = len(df)
-    return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;border-radius:8px;padding:18px 20px">'
-            f'<div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">News Impact · Read-Through</div>'
-            f'<div style="font-size:19px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK};margin-bottom:4px">What\'s moving — and who it hits</div>'
-            f'<div style="font-size:12px;color:{C_SUB};margin-bottom:2px">Top {n} stories ranked by <b style="color:#a89c8c">daily value</b> (recency × impact × model-alpha), each with its source, the read-through logic, and the name it threatens or helps. Latest: {_latest_s}.</div>'
-            f'{rows}</div>')
+    return (f'<div class="cnews-box" style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;border-radius:8px;padding:18px 20px">'
+            f'<div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">News Impact &middot; Read-Through</div>'
+            f'<div style="font-size:19px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK};margin-bottom:4px">What\'s moving &mdash; and who it hits</div>'
+            f'<div style="font-size:12px;color:{C_SUB};margin-bottom:10px">Top {n} of ~1,800 recent stories by <b style="color:#a89c8c">daily value</b> (recency &times; impact &times; model-alpha). &#9733; = hits a name you hold. Latest: {_latest_s}.</div>'
+            f'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">{chips}</div>'
+            f'{rows}{_js}</div>')
+
 
 
 def _alphavantage_news_panel() -> str:
