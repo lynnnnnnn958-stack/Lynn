@@ -5333,10 +5333,39 @@ def _news_deep_panel() -> str:
     C_CARD, C_INK, C_MUTE, C_SUB = "#16140f", "#f0e9da", "#8f866f", "#b0a68f"
     C_GOLD, C_POS, C_NEG = "#c8b487", "#8faa9a", "#c68b83"
 
+    import datetime as _dt, urllib.parse as _up
     df = df.copy()
-    df["_imp"] = pd.to_numeric(df.get("impact_score", 0), errors="coerce").fillna(0)
-    df["_abs"] = df["_imp"].abs()
-    df = df.sort_values("_abs", ascending=False).drop_duplicates(subset=["headline"]).head(16)
+    df["_imp"]   = pd.to_numeric(df.get("impact_score", 0), errors="coerce").fillna(0)
+    df["_alpha"] = pd.to_numeric(df.get("alpha_score", 0), errors="coerce").fillna(0)
+    df["_pub"]   = pd.to_datetime(df.get("published", ""), errors="coerce")
+    _today = pd.Timestamp(_dt.date.today())
+    df["_daysago"] = (_today - df["_pub"]).dt.days
+    # Value score per day: recency + impact magnitude + model alpha — so the feed
+    # leads with what's both recent AND consequential, not just loudest.
+    _imp_n    = (df["_imp"].abs() / 5.0).clip(0, 1)
+    _alpha_n  = ((df["_alpha"] - 33.0) / 48.0).clip(0, 1)
+    _rec_n    = (1.0 - df["_daysago"].fillna(30) / 30.0).clip(0, 1)
+    df["_value"] = 0.42 * _imp_n + 0.30 * _alpha_n + 0.28 * _rec_n
+    df = df.sort_values("_value", ascending=False).drop_duplicates(subset=["headline"]).head(18)
+    _latest = df["_pub"].max()
+    _latest_s = _latest.strftime("%b %d") if pd.notna(_latest) else "—"
+
+    def _domain(u):
+        try:
+            h = _up.urlparse(u).netloc.replace("www.", "")
+            return h if h else ""
+        except Exception:
+            return ""
+
+    def _datebadge(days):
+        if pd.isna(days):
+            return ""
+        days = int(days)
+        if days <= 0:   return "Today"
+        if days == 1:   return "Yesterday"
+        if days < 7:    return f"{days}d ago"
+        if days < 35:   return f"{days//7}w ago"
+        return f"{days}d ago"
 
     rows = ""
     for _, r in df.iterrows():
@@ -5345,28 +5374,36 @@ def _news_deep_panel() -> str:
         head  = _esc(str(r.get("headline", ""))[:150])
         tgt   = _esc(str(r.get("target_ticker", "")))
         rel   = _esc(str(r.get("target_relation", "")))
-        logic = _esc(str(r.get("news_logic", ""))[:220])
+        logic = _esc(str(r.get("news_logic", ""))[:230])
+        action = _esc(str(r.get("action_hint", ""))[:150])
         theme = _esc(str(r.get("theme", "") or r.get("target_sector", "")))
-        pub   = _esc(str(r.get("publisher", "")))
-        pubd  = _esc(str(r.get("published", "")))
+        pub   = _esc(str(r.get("publisher", "")).strip() or "source")
         imp   = float(r["_imp"])
+        badge = _datebadge(r.get("_daysago"))
         link  = str(r.get("link", ""))
-        head_html = (f'<a href="{_esc(link)}" target="_blank" style="color:{C_INK};text-decoration:none">{head}</a>'
+        dom   = _esc(_domain(link))
+        head_html = (f'<a href="{_esc(link)}" target="_blank" style="color:{C_INK};text-decoration:none;border-bottom:1px solid #3a3128">{head}</a>'
                      if link.startswith("http") else head)
-        rows += (f'<div style="padding:12px 0;border-top:1px solid #241f18">'
+        # Prominent, clickable source attribution (publisher + domain).
+        src_html = (f'<a href="{_esc(link)}" target="_blank" style="color:{C_GOLD};text-decoration:none;font-weight:400">{pub}</a>'
+                    if link.startswith("http") else f'<span style="color:{C_GOLD}">{pub}</span>')
+        if dom and dom.lower() not in pub.lower():
+            src_html += f'<span style="color:{C_MUTE};font-size:10px"> · {dom}</span>'
+        rows += (f'<div style="padding:13px 0;border-top:1px solid #241f18">'
                  f'<div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline">'
                  f'<span style="font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;color:{t_col}">{_esc(tone.title())} · impact {imp:+.0f}</span>'
-                 f'<span style="font-size:10px;color:{C_MUTE}">{theme}</span></div>'
-                 f'<div style="font-size:13px;color:{C_INK};line-height:1.45;margin:4px 0 3px">{head_html}</div>'
-                 f'<div style="font-size:11.5px;color:{C_SUB};line-height:1.5">{logic}</div>'
-                 f'<div style="font-size:11px;color:{C_GOLD};margin-top:3px">&rarr; hits <b>{tgt}</b> ({rel}) '
-                 f'<span style="color:{C_MUTE}">· {pub} {pubd}</span></div></div>')
+                 f'<span style="font-size:10px;color:{C_MUTE}">{badge}{" · " + theme if theme and theme != "nan" else ""}</span></div>'
+                 f'<div style="font-size:13.5px;color:{C_INK};line-height:1.45;margin:5px 0 3px">{head_html}</div>'
+                 f'<div style="font-size:11px;margin-bottom:4px">Source: {src_html}</div>'
+                 f'<div style="font-size:11.5px;color:{C_SUB};line-height:1.5"><b style="color:#a89c8c">Read-through:</b> {logic}</div>'
+                 + (f'<div style="font-size:11px;color:{C_SUB};line-height:1.45;margin-top:2px"><b style="color:#a89c8c">Do:</b> {action}</div>' if action and action != "nan" else "")
+                 + f'<div style="font-size:11px;color:{C_GOLD};margin-top:3px">&rarr; hits <b>{tgt}</b> ({rel})</div></div>')
 
     n = len(df)
     return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;border-radius:8px;padding:18px 20px">'
             f'<div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">News Impact · Read-Through</div>'
             f'<div style="font-size:19px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK};margin-bottom:4px">What\'s moving — and who it hits</div>'
-            f'<div style="font-size:12px;color:{C_SUB};margin-bottom:2px">Top {n} highest-impact stories, each mapped to the name it threatens or helps, with the read-through logic — not just a headline list.</div>'
+            f'<div style="font-size:12px;color:{C_SUB};margin-bottom:2px">Top {n} stories ranked by <b style="color:#a89c8c">daily value</b> (recency × impact × model-alpha), each with its source, the read-through logic, and the name it threatens or helps. Latest: {_latest_s}.</div>'
             f'{rows}</div>')
 
 

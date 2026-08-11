@@ -81,6 +81,7 @@ STEPS = [
     ("Step 0  — Price & signals",  "step_daily_price_signals.py",                 True,  900),
     ("Step 99 — News (S&P500全覆盖)", "canyon_final_v9_step99_news_aggregator.py", False, 300,
      ["--source", "alpha", "--top", "500", "--workers", "12"]),
+    ("Step 129— News Impact Targeting", "canyon_final_v9_step129_news_impact_targeting.py", False, 600),
     ("Step 79 — FinBERT sentiment","canyon_final_v9_step79_finbert_sentiment.py", False, 1500),  # ML 模型推理慢, 600s 不够 → 给 25min 余量 (2026-08-04)
     ("Step 80 — SEC MD&A NLP",    "canyon_final_v9_step80_sec_mda_nlp.py",       False, 3600),
     ("Step 81 — Earnings 8-K NLP","canyon_final_v9_step81_earnings_nlp.py",      False, 2400),
