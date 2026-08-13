@@ -2236,7 +2236,7 @@ class CanyonTradingSystem:
             benchmark: str = 'SPY') -> Dict:
         print(f"\n{'═'*62}")
         print(f"  🏔  CANYON Quant Trading System v6.0")
-print(f"  Offense/Defense × IC-validated Alpha × Execution Cost × Statistical Depth")
+        print(f"  Offense/Defense × IC-validated Alpha × Execution Cost × Statistical Depth")
         print(f"{'═'*62}")
         print(f"  Assets: {tickers}")
         print(f"  Period: {start} → {end}")
@@ -3000,7 +3000,7 @@ class RiskServer:
         Enforce per-stock cap + concentration constraint
         """
         if self._killed:
-print("  🚨 RiskServer: Kill Switch active, returning empty positions")
+            print("  🚨 RiskServer: Kill Switch active, returning empty positions")
             return pd.Series(0.0, index=weights.index)
 
         # Per-stock cap
@@ -3024,14 +3024,14 @@ print("  🚨 RiskServer: Kill Switch active, returning empty positions")
         dd   = ((equity - peak) / peak).iloc[-1]
         if dd < self.max_drawdown:
             self._killed = True
-print(f"  🚨 RiskServer Kill Switch: drawdown {dd:.2%} < {self.max_drawdown:.2%}")
+            print(f"  🚨 RiskServer Kill Switch: drawdown {dd:.2%} < {self.max_drawdown:.2%}")
             return True
         return False
 
     def reset(self):
         """Manually reset Kill Switch (after human confirmation)."""
         self._killed = False
-print("  ✅ RiskServer: Kill Switch reset")
+        print("  ✅ RiskServer: Kill Switch reset")
 
     def check_position_limits(self, weights: Dict[str, float]) -> Dict[str, float]:
         """Dict version, compatible with AlpacaExecution interface."""
@@ -3093,7 +3093,7 @@ def retry(fn, n: int = 3, delay: float = 1.0):
             if i == n - 1:
                 raise
             wait = delay * (2 ** i)
-print(f"  [retry {i+1}/{n}] waiting {wait:.1f}s: {str(e)[:50]}")
+            print(f"  [retry {i+1}/{n}] waiting {wait:.1f}s: {str(e)[:50]}")
             time.sleep(wait)
 
 
@@ -3115,7 +3115,7 @@ class Failover:
         try:
             return self.primary.submit_order(*args, **kwargs)
         except Exception as e:
-print(f"  ⚠️ Failover: primary failed ({str(e)[:40]}), switching to backup")
+            print(f"  ⚠️ Failover: primary failed ({str(e)[:40]}), switching to backup")
             self._using_backup = True
             return self.backup.submit_order(*args, **kwargs)
 
@@ -3125,14 +3125,14 @@ print(f"  ⚠️ Failover: primary failed ({str(e)[:40]}), switching to backup")
         try:
             return self.primary.rebalance(*args, **kwargs)
         except Exception as e:
-print(f"  ⚠️ Failover: primary failed, switching to backup")
+            print(f"  ⚠️ Failover: primary failed, switching to backup")
             self._using_backup = True
             return self.backup.rebalance(*args, **kwargs)
 
     def reset_to_primary(self):
         """Manually switch back after primary executor recovers."""
         self._using_backup = False
-print("  ✅ Failover: switched back to primary executor")
+        print("  ✅ Failover: switched back to primary executor")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3171,7 +3171,7 @@ def run_v7_system(prices: pd.DataFrame,
     combo_alpha = pool.combine(passed)
 
     if verbose:
-print(f"\n  [v7 AlphaPool] Passed gate: {len(passed)}/{len(pool.alphas)} alphas")
+        print(f"\n  [v7 AlphaPool] Passed gate: {len(passed)}/{len(pool.alphas)} alphas")
         pool.print_diagnostics()
 
     # ── Regime Model ──────────────────────────────────────────────────────────
@@ -3183,7 +3183,7 @@ print(f"\n  [v7 AlphaPool] Passed gate: {len(passed)}/{len(pool.alphas)} alphas"
 
     if verbose:
         rc = regime_series.value_counts()
-print(f"\n  [v7 RegimeModel] Current: {current_r} | "
+        print(f"\n  [v7 RegimeModel] Current: {current_r} | "
               f"Distribution: {dict(rc.items())}")
 
     # ── Meta Model ────────────────────────────────────────────────────────────
@@ -3293,7 +3293,7 @@ class CanyonTradingSystemV7:
     def run(self, tickers: List[str], start: str, end: str,
             benchmark: str = 'SPY') -> Dict:
         print(f"\n{'═'*65}")
-print(f"  🏔  CANYON Quant Trading System v7.0")
+        print(f"  🏔  CANYON Quant Trading System v7.0")
         print(f"  Data→AlphaPool→RegimeModel→MetaModel→Portfolio→RiskServer")
         print(f"{'═'*65}")
         print(f"  Assets: {tickers}")
@@ -3304,7 +3304,7 @@ print(f"  🏔  CANYON Quant Trading System v7.0")
 
         # ── Step1: Walk-Forward backtest (v6 engine, incl. full-position fix) ────────────────────
         print(f"\n{'─'*65}")
-print(f"  Step1: Walk-Forward backtest (Ch.7 + full-position fix + shorting)")
+        print(f"  Step1: Walk-Forward backtest (Ch.7 + full-position fix + shorting)")
         print(f"{'─'*65}")
         main_result = self.backtester.run(
             prices, volumes, market, self.stat_arb, self.od,
@@ -3318,7 +3318,7 @@ print(f"  Step1: Walk-Forward backtest (Ch.7 + full-position fix + shorting)")
 
         # ── Step2: Multi-period validation ─────────────────────────────────────────────────
         print(f"\n{'─'*65}")
-print(f"  Step2: Multi-period validation (Ch.7)")
+        print(f"  Step2: Multi-period validation (Ch.7)")
         print(f"{'─'*65}")
         period_df = self.backtester.multi_period(
             prices, volumes, market, self.stat_arb, self.od, n_periods=3
@@ -3353,7 +3353,7 @@ print(f"  Step2: Multi-period validation (Ch.7)")
 
         # ── Step4: Statistical depth report (v6) ──────────────────────────────────────
         print(f"\n{'─'*65}")
-print(f"  Step4: Statistical depth report (Bootstrap + Newey-West + factor exposure)")
+        print(f"  Step4: Statistical depth report (Bootstrap + Newey-West + factor exposure)")
         print(f"{'─'*65}")
         if 'daily_returns' in main_result and len(main_result['daily_returns']) > 30:
             dr = main_result['daily_returns']
@@ -3408,7 +3408,7 @@ print(f"  Step4: Statistical depth report (Bootstrap + Newey-West + factor expos
 
         # ── Step6: Current market analysis + position recommendation ─────────────────────────────────
         print(f"\n{'─'*65}")
-print(f"  Step6: Current market analysis + v7 position recommendation")
+        print(f"  Step6: Current market analysis + v7 position recommendation")
         print(f"{'─'*65}")
         current = self.analyze_current_v7(prices, volumes, market,
                                            passed, current_km_regime)
