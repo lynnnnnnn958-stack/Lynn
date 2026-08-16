@@ -122,6 +122,8 @@ STEPS = [
     ("Step 381 — Backtest 3Bks",  "step_backtest_rigorous.py",                    False, 300),
     ("Step 382 — Alpaca Execute", "step_alpaca_execution.py",                     False, 120),
     ("Step 383 — Alpaca P&L",    "step_alpaca_pnl.py",                            False,  60),
+    ("Step 387 — Insider Scan",  "canyon_insider_scanner.py",                     False, 400),
+    ("Step 388 — Insider Paper", "canyon_insider_paper.py",                       False,  90),
     ("Step 384 — Factor Exp",    "step_factor_exposure.py",                       False,  60),
     ("Step 385 — PEAD Tracker", "step_pead_tracker.py",                           False, 120),
     ("Step 386 — Famous 13F",   "step_famous_holdings.py",                        False, 300),
