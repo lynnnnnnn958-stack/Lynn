@@ -76,8 +76,18 @@ def universe():
 
 
 def cikmap(tks):
-    j = json.loads(_get("https://www.sec.gov/files/company_tickers.json").decode())
-    m = {e["ticker"].upper(): int(e["cik_str"]) for e in j.values()}
+    """Ticker→CIK from the local cache first (robust); fetch only as fallback."""
+    m = {}
+    cache = ROOT / "edgar_cik_map.json"
+    if cache.exists():
+        try:
+            m = {k.upper(): int(v) for k, v in json.loads(cache.read_text()).items()}
+        except Exception:
+            m = {}
+    if not m:
+        j = json.loads(_get("https://www.sec.gov/files/company_tickers.json").decode())
+        m = {e["ticker"].upper(): int(e["cik_str"]) for e in j.values()}
+        cache.write_text(json.dumps(m))
     return {t: m[t] for t in tks if t in m}
 
 
