@@ -6293,7 +6293,6 @@ def _build_event_engine_tab() -> str:
     </div>
     {_intraday_panel()}
     {_morning_brief_panel()}
-    {_insider_scan_panel()}
     {_ten_layer_matrix_panel()}
     {_macro_deep_panel()}
     {_fred_macro_panel()}
@@ -9895,6 +9894,8 @@ def build_html(daily: dict, chart: dict, summ: dict,
         <p class="today-card-note">{_best_convergence_ticker()[1]} signals agree · strongest conviction</p>
       </div>
     </div>
+
+    {_insider_scan_panel()}
 
     {_build_earnings_this_week(earnings_cal)}
     {_build_regime_gauge(hmm, _mo_bear_prob)}
