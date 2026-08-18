@@ -14,7 +14,7 @@ yfinance 代理 (假), 这里抓的是 EDGAR 原始 Form 4 XML。
 输出: smallcap_form4_buys.csv
 """
 from __future__ import annotations
-import json, re, time
+import json, re, time, os
 from pathlib import Path
 import pandas as pd
 import xml.etree.ElementTree as ET
@@ -30,8 +30,9 @@ UA = "canyon-quant research lynnnnnnn958@gmail.com"
 _sn = lambda x: re.sub(r"\{[^}]+\}", "", x)
 
 
-MAX_FORM4_PER_TICKER = 100000      # effectively no cap — full history (deep mode)
-OUT = ROOT / "smallcap_form4_buys_full.csv"   # deep-history output (2yr backup kept separate)
+MAX_FORM4_PER_TICKER = int(os.environ.get("MAX_F4", "100000"))   # cap for fast subset tests
+OUT = (ROOT / "smallcap_form4_sells.csv") if os.environ.get("INSIDER_SIDE") == "SELL" \
+      else (ROOT / "smallcap_form4_buys_full.csv")   # deep-history output
 
 
 def _new_session():
@@ -160,7 +161,9 @@ def parse_form4(cik, acc, prim):
             elif tg == "transactionShares": shares = _val(el)
             elif tg == "transactionPricePerShare": price = _val(el)
             elif tg == "transactionAcquiredDisposedCode": ad = _val(el)
-        if code == "P" and ad == "A":          # open-market purchase
+        want_sell = os.environ.get("INSIDER_SIDE") == "SELL"
+        hit = (code == "S" and ad == "D") if want_sell else (code == "P" and ad == "A")
+        if hit:                                  # open-market purchase (or sale if SELL mode)
             try:
                 sh = float(shares); pr = float(price)
             except Exception:
@@ -183,7 +186,10 @@ def main():
         done = set(prev["ticker"].astype(str).str.upper().unique())
         print(f"resume: {len(done)} tickers already done, {len(rows)} buys cached")
 
+    import sys as _sys
     todo = [t for t in tks if t in cm and t not in done]
+    if "--limit" in _sys.argv:                     # subset for a fast first read
+        todo = todo[:int(_sys.argv[_sys.argv.index("--limit") + 1])]
     print(f"todo: {len(todo)} tickers · DEEP mode (full history via submission shards)", flush=True)
     for k, tk in enumerate(todo, 1):
         cik = cm[tk]
