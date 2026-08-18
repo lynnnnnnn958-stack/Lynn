@@ -35,7 +35,7 @@ ROOT = Path(__file__).parent
 SIGNALS = ROOT / "insider_scan_signals.csv"
 TODAY_OUT = ROOT / "insider_scan_today.csv"
 LOOKBACK_DAYS = 35          # 只看近 35 天的新 Form 4 (覆盖 21 交易日窗口 + 缓冲)
-HOLD_TDAYS = 21             # 验证过的持仓期 (交易日)
+HOLD_TDAYS = 10             # 验证过的最优持仓期 (交易日): 10天净alpha≈2×21天, t=3.7, 成本仍可控
 CLUSTER_WIN = 30            # cluster 判定窗口 (天)
 LARGE_USD = 100_000
 

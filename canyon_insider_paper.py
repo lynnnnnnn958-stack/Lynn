@@ -48,7 +48,7 @@ BOOK = ROOT / "insider_paper_book.json"
 SUMMARY = ROOT / "insider_paper_summary.json"
 WATCH = ROOT / "insider_scan_today.csv"
 SLOT_USD = 10_000              # 每个信号等权名义金额
-HOLD_CAL_DAYS = 30            # ≈21 交易日
+HOLD_CAL_DAYS = 14            # ≈10 交易日 (验证过的最优持仓期)
 MAX_POSITIONS = 15
 
 

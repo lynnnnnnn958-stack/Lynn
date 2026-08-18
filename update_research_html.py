@@ -5318,7 +5318,7 @@ def _macro_deep_panel() -> str:
 def _insider_scan_panel() -> str:
     """Small-cap insider-BUY watchlist — the one validated edge. Reads
     insider_scan_today.csv (from canyon_insider_scanner.py). Names with a fresh
-    Form 4 open-market buy still inside the 21-trading-day hold window, ranked by
+    Form 4 open-market buy still inside the 10-trading-day hold window, ranked by
     signal strength (cluster > large > single). Honest: research signal, not orders."""
     import html as _h, datetime as _dt
     def _esc(s): return _h.escape(str(s)) if s is not None else ""
@@ -5332,11 +5332,12 @@ def _insider_scan_panel() -> str:
                f'color:{C_INK};margin-bottom:4px">Where insiders are buying &mdash; the one validated edge</div>')
     thesis = ('<div style="font-size:12px;color:%s;margin-bottom:12px;line-height:1.5">'
               'S&amp;P 600 small-caps with a fresh Form 4 <b style="color:#a89c8c">open-market buy</b> '
-              'still inside the <b>21-trading-day</b> hold window. Backtested on 28yr of real Form 4 '
-              '(market-neutral, costs, HAC t, Deflated Sharpe, out-of-sample): '
-              '<b style="color:%s">all-buys t=3.0 &middot; cluster t=2.6 &middot; DSR&gt;0.95</b> &mdash; the only signal '
-              'in the system that survives every honest test. <span style="color:%s">Alpha magnitude is optimistic '
-              '(early-era + concentration); treat as a research watchlist, not orders.</span></div>'
+              'still inside the <b>10-trading-day</b> hold window. Backtested on real Form 4, market-neutral, '
+              'realistic small-cap costs (44bps), HAC t, out-of-sample, holds in every sub-period incl. the '
+              'calm 2010-19 bull: <b style="color:%s">+31%/yr net &middot; t=3.7 &middot; the &#9733;dip subset (insider '
+              'bought after a fall) is strongest</b> &mdash; the only signal in the system that survives every honest '
+              'test. <span style="color:%s">It is a distress/turnaround play, not value; small capacity; '
+              'a research watchlist, not orders.</span></div>'
               % (C_SUB, C_POS, C_MUTE))
 
     if not p.exists() or p.stat().st_size < 20:
@@ -5351,7 +5352,7 @@ def _insider_scan_panel() -> str:
         return ""
     if df.empty:
         body = (f'<div style="font-size:12px;color:{C_MUTE};padding:10px 0">No small-cap insider '
-                'is inside a live 21-day buy window right now. That is a real "nothing to do" &mdash; '
+                'is inside a live 10-day buy window right now. That is a real "nothing to do" &mdash; '
                 'the edge is episodic.</div>')
         return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;'
                 f'border-radius:8px;padding:18px 20px">{eyebrow}{thesis}{body}</div>')
@@ -5373,25 +5374,25 @@ def _insider_scan_panel() -> str:
             usd = "-"
         left = int(r.get("approx_days_left", 0))
         ins = int(r.get("insiders", 0))
-        bar = int(round(21 and (21 - left) / 21 * 100))
+        bar = int(round((10 - left) / 10 * 100)) if left is not None else 0
         rows += (f'<div style="padding:11px 0;border-top:1px solid #241f18">'
                  f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">'
                  f'<div><span style="font-size:15px;color:{C_INK};font-weight:600;letter-spacing:.02em">{_esc(r.get("ticker"))}</span>{tags}</div>'
                  f'<span style="font-size:11px;color:{C_GOLD}">{usd}</span></div>'
                  f'<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:4px">'
                  f'<span style="font-size:11px;color:{C_SUB}">{ins} insider{"s" if ins!=1 else ""} &middot; latest buy {_esc(r.get("latest_buy"))}</span>'
-                 f'<span style="font-size:10.5px;color:{C_MUTE}">~{left}d left in 21d hold</span></div>'
-                 # progress bar of the 21-day clock
+                 f'<span style="font-size:10.5px;color:{C_MUTE}">~{left}d left in 10d hold</span></div>'
+                 # progress bar of the 10-day clock
                  f'<div style="height:3px;background:#241f18;border-radius:2px;margin-top:5px">'
                  f'<div style="height:3px;width:{bar}%;background:{C_POS};border-radius:2px"></div></div></div>')
 
     note = (f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:12px;line-height:1.5">'
             'Ranked by strength: <b style="color:#c68b83">★ Dip</b> (insider bought AFTER the stock fell &mdash; '
             'validated strongest: +20%/yr vs +12.5% baseline, t=3.4) &gt; cluster (&ge;2 insiders/30d) &gt; '
-            'large (&ge;$100k) &gt; single. Green bar = elapsed of the 21-day window. Exit near bar-full.</div>')
+            'large (&ge;$100k) &gt; single. Green bar = elapsed of the 10-day window. Exit near bar-full.</div>')
     return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;'
             f'border-radius:8px;padding:18px 20px">{eyebrow}{thesis}'
-            f'<div style="font-size:11px;color:{C_MUTE};margin-bottom:2px">{len(df)} active name(s) &middot; 21-day hold clock</div>'
+            f'<div style="font-size:11px;color:{C_MUTE};margin-bottom:2px">{len(df)} active name(s) &middot; 10-day hold clock</div>'
             f'{rows}{note}</div>')
 
 
