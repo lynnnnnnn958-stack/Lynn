@@ -49,7 +49,7 @@ SUMMARY = ROOT / "insider_paper_summary.json"
 WATCH = ROOT / "insider_scan_today.csv"
 SLOT_USD = 10_000              # 每个信号等权名义金额
 HOLD_CAL_DAYS = 14            # ≈10 交易日 (验证过的最优持仓期)
-MAX_POSITIONS = 15
+MAX_POSITIONS = 30           # 多买小注: 右尾 edge 要足够多"彩票"才能可靠中到赢家
 
 
 def _load_book():
@@ -132,9 +132,14 @@ def run():
                                     "held_days": held_days, "exit_order": oid})
             del open_pos[tk]
 
-    # ---- 入场: 今日活跃且未持有的信号 ----
+    # ---- 入场: 今日活跃且未持有的信号, 用风控引擎定注码 ----
     entered = 0
     if not watch.empty:
+        try:
+            from canyon_insider_sizing import size_positions
+            watch = size_positions(watch)          # 加 size_usd 列(右尾风控)
+        except Exception as e:
+            print(f"  sizing engine unavailable ({str(e)[:40]}) — flat ${SLOT_USD}")
         for _, r in watch.iterrows():
             tk = str(r["ticker"])
             if tk in open_pos or len(open_pos) >= MAX_POSITIONS:
@@ -142,11 +147,15 @@ def run():
             p0 = px.get(tk)
             if not p0 or p0 <= 0:
                 continue
-            qty = SLOT_USD / p0
+            notional = float(r["size_usd"]) if "size_usd" in r and r["size_usd"] > 0 else SLOT_USD
+            if notional < 1:
+                continue
+            qty = notional / p0
             oid = _maybe_live_order(tk, qty, "BUY")
             open_pos[tk] = {"entry_date": today.strftime("%Y-%m-%d"), "entry_price": p0,
-                            "qty": round(qty, 4), "notional": SLOT_USD,
-                            "cluster": bool(r.get("cluster")), "large": bool(r.get("large")),
+                            "qty": round(qty, 4), "notional": round(notional, 0),
+                            "dip": bool(r.get("dip")), "cluster": bool(r.get("cluster")),
+                            "large": bool(r.get("large")),
                             "insiders": int(r.get("insiders", 0)), "entry_order": oid}
             entered += 1
 
