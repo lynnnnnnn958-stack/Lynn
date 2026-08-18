@@ -29,7 +29,7 @@ from pathlib import Path
 import pandas as pd
 
 from step_smallcap_form4 import universe, cikmap, collect_all_form4, parse_form4, _get, DELAY
-import json, time
+import json, time, os
 
 ROOT = Path(__file__).parent
 SIGNALS = ROOT / "insider_scan_signals.csv"
@@ -105,6 +105,57 @@ def _trading_days_ago(n):
     return pd.Timestamp.today() - pd.Timedelta(days=int(n * 1.4))
 
 
+def _load_env():
+    p = ROOT / ".env"
+    if not p.exists():
+        return
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+def _alpaca_trail63(tickers):
+    """Trailing ~63-trading-day return per ticker from Alpaca (current data).
+    <0 = the stock fell before the insider bought — the validated strongest case."""
+    _load_env()
+    key = os.environ.get("ALPACA_KEY_ID"); sec = os.environ.get("ALPACA_KEY_SECRET")
+    if not key or not sec:
+        return {}
+    try:
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+        from datetime import datetime, timedelta
+        cli = StockHistoricalDataClient(key, sec)
+        req = StockBarsRequest(symbol_or_symbols=list(tickers), timeframe=TimeFrame.Day,
+                               start=datetime.now() - timedelta(days=130))
+        df = cli.get_stock_bars(req).df
+        out = {}
+        for tk in tickers:
+            try:
+                c = df.loc[tk]["close"]
+                if len(c) >= 64:
+                    out[tk] = float(c.iloc[-1] / c.iloc[-64] - 1)
+            except Exception:
+                continue
+        return out
+    except Exception as e:
+        print(f"  Alpaca trailing-return feed unavailable ({str(e)[:40]})")
+        return {}
+
+
+def _local_trail(px, tk):
+    """Fallback: trailing 63-day return from the local price file's most recent data."""
+    if px is None or tk not in px.columns:
+        return None
+    c = px[tk].dropna()
+    if len(c) >= 64:
+        return float(c.iloc[-1] / c.iloc[-64] - 1)
+    return None
+
+
 def build_watchlist(allb: pd.DataFrame) -> pd.DataFrame:
     if allb.empty:
         return allb
@@ -114,6 +165,16 @@ def build_watchlist(allb: pd.DataFrame) -> pd.DataFrame:
     active = allb[allb["dt"] >= cutoff]
     if active.empty:
         return active
+    tks = sorted(active["ticker"].astype(str).unique())
+    trail = _alpaca_trail63(tks)                 # 主源: Alpaca 实时
+    lpx = None
+    if len(trail) < len(tks):                    # 后备: 本地价格文件
+        p = ROOT / "smallcap_price_history.csv"
+        if p.exists():
+            try:
+                lpx = pd.read_csv(p, index_col=0, parse_dates=True).sort_index()
+            except Exception:
+                lpx = None
     out = []
     for tk, g in active.groupby("ticker"):
         g = g.sort_values("dt")
@@ -121,7 +182,6 @@ def build_watchlist(allb: pd.DataFrame) -> pd.DataFrame:
         val = pd.to_numeric(g.get("value", 0), errors="coerce").fillna(0).sum()
         cxo = int(pd.to_numeric(g.get("role_cxo", 0), errors="coerce").fillna(0).max())
         latest = g["dt"].max()
-        first = g["dt"].min()
         # cluster: 窗口内 ≥2 不同内部人
         cl = False
         for _, r in g.iterrows():
@@ -129,20 +189,28 @@ def build_watchlist(allb: pd.DataFrame) -> pd.DataFrame:
             if (w["owner"].nunique() if "owner" in w.columns else len(w)) >= 2:
                 cl = True; break
         held_td = int((pd.Timestamp.today() - latest).days / 1.4)   # 约略已持交易日
+        tr = trail.get(tk)                          # 买入前 ~63 天涨跌 (Alpaca)
+        if tr is None:
+            tr = _local_trail(lpx, tk)              # 后备: 本地
+        is_dip = tr is not None and tr < 0
+        is_bigdip = tr is not None and tr < -0.10
         out.append({
             "ticker": tk, "latest_buy": latest.strftime("%Y-%m-%d"),
             "insiders": int(owners), "cluster": cl, "cxo_involved": bool(cxo),
             "total_usd": int(val), "large": val >= LARGE_USD,
+            "dip": bool(is_dip), "big_dip": bool(is_bigdip),
+            "trail_63d": round(tr, 3) if tr is not None else None,
             "buys_in_window": len(g),
             "approx_days_held": max(held_td, 0),
             "approx_days_left": max(HOLD_TDAYS - held_td, 0),
         })
     w = pd.DataFrame(out)
-    # 信号强度排序: cluster > large > 单人; 再按不同内部人数、金额、最新
-    w["strength"] = (w["cluster"].astype(int) * 3 + w["large"].astype(int) * 2
+    # 信号强度排序: 抄底(validated 最强) > cluster > large > 单人
+    w["strength"] = (w["big_dip"].astype(int) * 3 + w["dip"].astype(int) * 2
+                     + w["cluster"].astype(int) * 3 + w["large"].astype(int) * 2
                      + (w["insiders"] >= 2).astype(int) + w["cxo_involved"].astype(int))
-    w = w.sort_values(["strength", "insiders", "total_usd", "latest_buy"],
-                      ascending=[False, False, False, False]).reset_index(drop=True)
+    w = w.sort_values(["strength", "dip", "insiders", "total_usd", "latest_buy"],
+                      ascending=[False, False, False, False, False]).reset_index(drop=True)
     w.to_csv(TODAY_OUT, index=False)
     return w
 
@@ -164,6 +232,8 @@ def main():
     show = w.head(25)
     for _, r in show.iterrows():
         tag = []
+        if r.get("big_dip"): tag.append("DEEP-DIP★")
+        elif r.get("dip"): tag.append("DIP★")
         if r["cluster"]: tag.append("CLUSTER")
         if r["large"]: tag.append("LARGE")
         if r["cxo_involved"]: tag.append("CEO/CFO")
