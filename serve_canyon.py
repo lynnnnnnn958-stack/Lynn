@@ -8,7 +8,7 @@ import http.server, subprocess, threading, json, time, sys
 from pathlib import Path
 
 ROOT   = Path(__file__).parent
-HTML   = ROOT / "canyon_v9_research.html"
+HTML   = ROOT / "canyon_v24_research.html"
 PORT   = 8888
 STALE_HOURS = 8   # re-run pipeline if data is older than this
 
