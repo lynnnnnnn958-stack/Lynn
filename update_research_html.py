@@ -5390,15 +5390,14 @@ def _insider_scan_panel() -> str:
                f'color:{C_GOLD};margin-bottom:2px">Insider Buy Signal &middot; Small-Cap</div>'
                '<div style="font-size:19px;font-family:\'Baskerville\',Georgia,serif;'
                f'color:{C_INK};margin-bottom:4px">Where insiders are buying &mdash; the one validated edge</div>')
-    thesis = ('<div style="font-size:12px;color:%s;margin-bottom:12px;line-height:1.5">'
+    thesis = (f'<div style="font-size:12px;color:{C_SUB};margin-bottom:12px;line-height:1.5">'
               'S&amp;P 600 small-caps with a fresh Form 4 <b style="color:#a89c8c">open-market buy</b> '
               'still inside the <b>10-trading-day</b> hold window. Backtested on real Form 4, market-neutral, '
               'realistic small-cap costs (44bps), HAC t, out-of-sample, holds in every sub-period incl. the '
-              'calm 2010-19 bull: <b style="color:%s">+31%/yr net &middot; t=3.7 &middot; the &#9733;dip subset (insider '
+              f'calm 2010-19 bull: <b style="color:{C_POS}">+31%/yr net &middot; t=3.7 &middot; the &#9733;dip subset (insider '
               'bought after a fall) is strongest</b> &mdash; the only signal in the system that survives every honest '
-              'test. <span style="color:%s">It is a distress/turnaround play, not value; small capacity; '
-              'a research watchlist, not orders.</span></div>'
-              % (C_SUB, C_POS, C_MUTE))
+              f'test. <span style="color:{C_MUTE}">It is a distress/turnaround play, not value; small capacity; '
+              'a research watchlist, not orders.</span></div>')
 
     if not p.exists() or p.stat().st_size < 20:
         body = (f'<div style="font-size:12px;color:{C_MUTE};padding:10px 0">'
