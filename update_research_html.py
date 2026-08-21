@@ -5315,6 +5315,66 @@ def _macro_deep_panel() -> str:
             f'{rows}</div>')
 
 
+def _insider_short_panel() -> str:
+    """Small-cap insider-SELL SHORT watchlist (the book's short leg). Reads
+    insider_short_today.csv. Only borrowable names are actually shortable."""
+    import html as _h
+    def _esc(s): return _h.escape(str(s)) if s is not None else ""
+    C_CARD, C_INK, C_MUTE, C_SUB = "#16140f", "#f0e9da", "#8f866f", "#b0a68f"
+    C_GOLD, C_NEG, C_POS = "#c8b487", "#c68b83", "#8faa9a"
+    p = ROOT / "insider_short_today.csv"
+    eyebrow = ('<div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;'
+               f'color:{C_NEG};margin-bottom:2px">Insider Sell &middot; Short Leg</div>'
+               '<div style="font-size:19px;font-family:\'Baskerville\',Georgia,serif;'
+               f'color:{C_INK};margin-bottom:4px">Where insiders are selling &mdash; short candidates</div>')
+    thesis = (f'<div style="font-size:12px;color:{C_SUB};margin-bottom:12px;line-height:1.5">'
+              'Small-caps with heavy recent insider <b style="color:#a89c8c">open-market selling</b>. Validated '
+              '(6,542 real sells, reversal-neutralized): short gross +22.7%/t=5.3, <b style="color:'
+              f'{C_POS}">+12.7%/t=3.0 net of 10% borrow</b> &mdash; but DIES at 25% borrow. So only '
+              '<b>borrowable</b> names qualify (hard-to-borrow = high fee = the death zone). '
+              '<span style="color:#8f866f">Shorting is unlimited-loss + squeeze risk; confirm the borrow fee before any order.</span></div>')
+    if not p.exists() or p.stat().st_size < 20:
+        return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;'
+                f'border-radius:8px;padding:18px 20px">{eyebrow}{thesis}'
+                f'<div style="font-size:12px;color:{C_MUTE};padding:8px 0">Short scanner not run yet.</div></div>')
+    try:
+        df = pd.read_csv(p)
+    except Exception:
+        return ""
+    borrow = df[df.get("tradable_short", False) == True] if "tradable_short" in df.columns else df
+    if borrow.empty:
+        body = (f'<div style="font-size:12px;color:{C_MUTE};padding:8px 0">Insider selling detected but '
+                'no names are currently easy-to-borrow &mdash; nothing shortable without a high fee. '
+                'A real "stand down".</div>')
+        return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;'
+                f'border-radius:8px;padding:18px 20px">{eyebrow}{thesis}{body}</div>')
+    rows = ""
+    for _, r in borrow.head(20).iterrows():
+        def _chip(txt, col):
+            return (f'<span style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:{col};'
+                    f'border:1px solid {col};border-radius:3px;padding:1px 5px;margin-left:5px">{txt}</span>')
+        tags = ""
+        if bool(r.get("cluster")): tags += _chip("Cluster", C_MUTE)
+        if bool(r.get("large")):   tags += _chip("Large", C_GOLD)
+        if bool(r.get("cxo_involved")): tags += _chip("CEO/CFO", C_SUB)
+        try:
+            usd = f"${int(r.get('total_usd', 0)):,}"
+        except Exception:
+            usd = "-"
+        sellers = int(r.get("sellers", 0))
+        rows += (f'<div style="padding:10px 0;border-top:1px solid #241f18;display:flex;'
+                 f'justify-content:space-between;align-items:baseline;gap:10px">'
+                 f'<div><span style="font-size:15px;color:{C_INK};font-weight:600">{_esc(r.get("ticker"))}</span>'
+                 f'<span style="font-size:9px;color:{C_POS};border:1px solid {C_POS};border-radius:3px;'
+                 f'padding:1px 5px;margin-left:6px">borrowable</span>{tags}</div>'
+                 f'<div style="text-align:right"><span style="font-size:11px;color:{C_NEG}">{usd} sold</span>'
+                 f'<span style="font-size:10px;color:{C_MUTE};display:block">{sellers} seller(s) &middot; sold {_esc(r.get("latest_sell"))}</span></div></div>')
+    return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;'
+            f'border-radius:8px;padding:18px 20px">{eyebrow}{thesis}'
+            f'<div style="font-size:11px;color:{C_MUTE};margin-bottom:2px">{len(borrow)} borrowable short candidate(s)</div>'
+            f'{rows}</div>')
+
+
 def _insider_scan_panel() -> str:
     """Small-cap insider-BUY watchlist — the one validated edge. Reads
     insider_scan_today.csv (from canyon_insider_scanner.py). Names with a fresh
@@ -9900,6 +9960,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
     </div>
 
     {_insider_scan_panel()}
+    {_insider_short_panel()}
 
     {_build_earnings_this_week(earnings_cal)}
     {_build_regime_gauge(hmm, _mo_bear_prob)}
