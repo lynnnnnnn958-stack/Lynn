@@ -50,6 +50,8 @@ WATCH = ROOT / "insider_scan_today.csv"
 SLOT_USD = 10_000              # 每个信号等权名义金额
 HOLD_CAL_DAYS = 14            # ≈10 交易日 (验证过的最优持仓期)
 MAX_POSITIONS = 30           # 多买小注: 右尾 edge 要足够多"彩票"才能可靠中到赢家
+MAX_SHORTS = 15              # 空头腿(内部人卖出, 仅可借)
+SHORT_SLOT_USD = 8_000       # 每个空头名义(略小于多头, 空头风险更高)
 
 
 def _load_book():
@@ -125,8 +127,9 @@ def run():
             exit_px = px.get(tk)
             if exit_px is None:
                 continue                       # 没报价, 下次再平
-            ret = exit_px / pos["entry_price"] - 1
-            oid = _maybe_live_order(tk, pos["qty"], "SELL")
+            raw = exit_px / pos["entry_price"] - 1
+            ret = -raw if pos.get("side") == "SHORT" else raw   # 空头: 跌才赚
+            oid = _maybe_live_order(tk, pos["qty"], "BUY" if pos.get("side") == "SHORT" else "SELL")
             book["closed"].append({**pos, "ticker": tk, "exit_date": today.strftime("%Y-%m-%d"),
                                     "exit_price": exit_px, "return": round(ret, 4),
                                     "held_days": held_days, "exit_order": oid})
@@ -159,23 +162,55 @@ def run():
                             "insiders": int(r.get("insiders", 0)), "entry_order": oid}
             entered += 1
 
+    # ---- 空头入场: 内部人卖出候选(仅可借的), side=SHORT ----
+    shorts_entered = 0
+    sp = ROOT / "insider_short_today.csv"
+    if sp.exists() and sp.stat().st_size > 20:
+        try:
+            sw = pd.read_csv(sp)
+            sw = sw[sw.get("tradable_short", False) == True]       # 只做可借的
+        except Exception:
+            sw = pd.DataFrame()
+        if not sw.empty:
+            spx = _prices(sorted(set(sw["ticker"].astype(str))))
+            n_short = sum(1 for p in open_pos.values() if p.get("side") == "SHORT")
+            for _, r in sw.iterrows():
+                tk = str(r["ticker"])
+                if tk in open_pos or n_short >= MAX_SHORTS:
+                    continue
+                p0 = spx.get(tk)
+                if not p0 or p0 <= 0:
+                    continue
+                qty = SHORT_SLOT_USD / p0
+                oid = _maybe_live_order(tk, qty, "SELL")           # 开空 = 卖
+                open_pos[tk] = {"side": "SHORT", "entry_date": today.strftime("%Y-%m-%d"),
+                                "entry_price": p0, "qty": round(qty, 4), "notional": SHORT_SLOT_USD,
+                                "cluster": bool(r.get("cluster")), "large": bool(r.get("large")),
+                                "sellers": int(r.get("sellers", 0)), "entry_order": oid}
+                n_short += 1; shorts_entered += 1
+
     book["open"] = open_pos
     BOOK.write_text(json.dumps(book, indent=2))
-    return _summarize(book, px, entered)
+    return _summarize(book, px, entered, shorts_entered)
 
 
-def _summarize(book, px, entered):
+def _summarize(book, px, entered, shorts_entered=0):
     closed = pd.DataFrame(book["closed"])
     openp = book["open"]
-    # 未实现
+    # 未实现(空头方向取反)
     unrl = []
     for tk, pos in openp.items():
         cur = px.get(tk, pos["entry_price"])
-        unrl.append(cur / pos["entry_price"] - 1)
+        raw = cur / pos["entry_price"] - 1
+        unrl.append(-raw if pos.get("side") == "SHORT" else raw)
+    n_short = sum(1 for p in openp.values() if p.get("side") == "SHORT")
     s = {
         "as_of": datetime.now().isoformat(),
         "open_positions": len(openp),
+        "open_long": len(openp) - n_short,
+        "open_short": n_short,
         "entered_today": entered,
+        "shorts_entered_today": shorts_entered,
         "closed_trades": int(len(closed)),
     }
     if len(closed):
@@ -202,7 +237,8 @@ def main():
     live = os.environ.get("INSIDER_PAPER_LIVE") == "1"
     print(f"  mode: {'LIVE paper orders' if live else 'ledger-only (Alpaca prices, no orders)'}")
     s = run()
-    print(f"\n  open {s['open_positions']} · entered today {s['entered_today']} · "
+    print(f"\n  open {s['open_positions']} ({s.get('open_long',0)} long / {s.get('open_short',0)} short) · "
+          f"entered today {s['entered_today']} long + {s.get('shorts_entered_today',0)} short · "
           f"closed {s['closed_trades']}")
     if s.get("closed_trades"):
         print(f"  realized: win {s.get('win_rate')} · avg/trade {s.get('avg_return_per_trade'):+.2%} · "
