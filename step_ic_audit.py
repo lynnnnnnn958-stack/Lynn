@@ -65,6 +65,8 @@ if not price_path.exists():
     raise SystemExit(1)
 
 price_raw = pd.read_csv(price_path)
+if "Date" not in price_raw.columns:            # 日期是无名 index 列 → 命名为 Date
+    price_raw = price_raw.rename(columns={price_raw.columns[0]: "Date"})
 price_raw["Date"] = pd.to_datetime(price_raw["Date"], errors="coerce")
 price_raw = price_raw.dropna(subset=["Date"])
 price_raw = price_raw.set_index("Date").sort_index()

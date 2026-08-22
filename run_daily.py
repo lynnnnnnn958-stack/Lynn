@@ -97,7 +97,7 @@ STEPS = [
     ("Step 49 — Sector rotation", "canyon_final_v9_step49_l3_sector_rotation.py",False, 300),
     ("Step 370 — HMM Regime",     "canyon_final_v9_step370_hmm_regime.py",       False, 900),
     ("Step 371 — Macro Outlook",  "step_macro_regime_outlook.py",                False, 120),
-    ("Step 372 — DCF Valuation", "step_dcf_valuation.py",                        False, 600),
+    ("Step 372 — DCF Valuation", "step_dcf_valuation.py",                        False, 1500),
     ("Step 373 — Short Scanner", "step_short_scanner.py",                        False, 360),
     ("Step 374 — Push Alerts",   "step_push_alerts.py",                          False,  60),
     ("Step 375 — Econ Calendar", "step_economic_calendar.py",                    False,  30),
