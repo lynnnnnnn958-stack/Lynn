@@ -61,12 +61,19 @@ def _borrow_gate(tickers):
     return out
 
 
+SCAN_BUDGET_S = int(os.environ.get("SHORT_BUDGET_S", "1200"))   # 时间预算: 到点收工
+
+
 def scan_sells(tickers):
     os.environ["INSIDER_SIDE"] = "SELL"          # 让 parse_form4 抓卖出
     since = (pd.Timestamp.today() - pd.Timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     cm = cikmap(tickers)
     rows = []
+    t0 = time.time()
     for k, tk in enumerate(tickers, 1):
+        if time.time() - t0 > SCAN_BUDGET_S:
+            print(f"  budget {SCAN_BUDGET_S}s reached at {k}/{len(tickers)} — building from partial", flush=True)
+            break
         cik = cm.get(tk)
         if cik is None:
             continue
