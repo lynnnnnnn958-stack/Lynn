@@ -125,7 +125,23 @@ def _risk_checks(longs, shorts, long_usd):
         checks["max_name_pct"] = round(maxn / longs["size_usd"].sum(), 3)
         if maxn / longs["size_usd"].sum() > MAX_NAME_PCT * 1.5:
             flags.append(f"single name {maxn/longs['size_usd'].sum():.0%} > cap")
-    checks["sector_concentration"] = "n/a — no small-cap sector data (SIC cache pending)"
+    # 行业集中度(有 SIC 缓存时)
+    secp = ROOT / "smallcap_sectors.csv"
+    if secp.exists() and longs is not None and len(longs) and "size_usd" in getattr(longs, "columns", []):
+        try:
+            sm = pd.read_csv(secp)
+            smap = dict(zip(sm["ticker"].astype(str), sm["sector"].astype(str)))
+            lg = longs.copy(); lg["sector"] = lg["ticker"].astype(str).map(smap).fillna("Unknown")
+            by_sec = lg.groupby("sector")["size_usd"].sum() / lg["size_usd"].sum()
+            top_sec = by_sec.idxmax(); top_pct = float(by_sec.max())
+            checks["top_sector"] = f"{top_sec} {top_pct:.0%}"
+            checks["sector_breakdown"] = {k: round(float(v), 3) for k, v in by_sec.sort_values(ascending=False).head(5).items()}
+            if top_pct > MAX_SECTOR_PCT:
+                flags.append(f"sector {top_sec} {top_pct:.0%} > {MAX_SECTOR_PCT:.0%} cap")
+        except Exception:
+            checks["top_sector"] = "n/a"
+    else:
+        checks["top_sector"] = "n/a — SIC cache pending"
     checks["breaches"] = flags
     checks["ok"] = len(flags) == 0
     return checks
