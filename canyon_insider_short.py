@@ -121,12 +121,13 @@ def build_short_watchlist(alls: pd.DataFrame) -> pd.DataFrame:
     w["shortable"] = [gate.get(tk, (None, None))[0] for tk in w["ticker"]]
     w["easy_to_borrow"] = [gate.get(tk, (None, None))[1] for tk in w["ticker"]]
     w["tradable_short"] = w["shortable"].fillna(False) & w["easy_to_borrow"].fillna(False)
-    # 强度: 卖得多/大额/CXO 参与 越强(注: cluster 卖出在验证中偏弱, 权重低)
-    w["strength"] = (w["large"].astype(int) * 2 + (w["sellers"] >= 3).astype(int) * 2
-                     + w["cxo_involved"].astype(int) + w["cluster"].astype(int))
-    # 只把"可做空"的排前面
-    w = w.sort_values(["tradable_short", "strength", "total_usd"],
-                      ascending=[False, False, False]).reset_index(drop=True)
+    # 强度: CLUSTER(多人同抛)最强 —— 验证显示只有集中卖出做空 alpha 够猛(-56.7%),
+    # 且只有它合体后能真正提升 Sharpe(0.95→1.05); 单人/大额/CEO 卖出反而稀释。
+    w["strength"] = (w["cluster"].astype(int) * 4 + (w["sellers"] >= 3).astype(int) * 2
+                     + w["large"].astype(int) + w["cxo_involved"].astype(int))
+    # 只把"可做空 + 集中"的排前面
+    w = w.sort_values(["tradable_short", "cluster", "strength", "total_usd"],
+                      ascending=[False, False, False, False]).reset_index(drop=True)
     w.to_csv(TODAY_OUT, index=False)
     return w
 
