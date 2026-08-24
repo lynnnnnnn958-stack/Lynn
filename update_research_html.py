@@ -5356,7 +5356,7 @@ def _pm_desk_panel() -> str:
                  f'<b style="color:{C_POS if rk.get("ok") else C_NEG}">Risk {"✓ clear" if rk.get("ok") else "⚠ breach"}</b> &middot; '
                  f'top-5 concentration {rk.get("top5_long_pct","—")} &middot; max name {rk.get("max_name_pct","—")}'
                  + (f' &middot; dropped {len(_conf)} conflicting ({_esc(", ".join(_conf))})' if _conf else '')
-                 + f' &middot; sector cap: {_esc(rk.get("sector_concentration",""))[:38]}</div>')
+                 + f' &middot; top sector {_esc(rk.get("top_sector","n/a"))}</div>')
     return (f'<div style="margin-bottom:26px;background:linear-gradient(180deg,#1b1a12,#16140f);'
             f'border:1px solid {C_GOLD};border-radius:10px;padding:20px 22px">'
             f'<div style="font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">PM Desk &middot; Today\'s Decision</div>'
