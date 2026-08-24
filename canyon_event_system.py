@@ -283,6 +283,44 @@ def macro_filter() -> float:
     return 0.85
 
 
+# ── 宏观链条 → 选股倾斜(L1 受益/风险链条真正驱动 L7 选股)──────────────────────
+def _macro_chains():
+    """从 L1 情报评分卡读 受益链条/风险链条(GICS 行业名)。"""
+    p = ROOT / "macro_intel_scorecard.json"
+    ben, risk = set(), set()
+    if p.exists():
+        try:
+            j = json.load(open(p))
+            ben = {str(x).strip() for x in (j.get("重点受益链条") or [])}
+            risk = {str(x).strip() for x in (j.get("风险链条") or [])}
+        except Exception:
+            pass
+    return ben, risk
+
+
+def _sector_map():
+    """ticker → GICS 行业(用于链条匹配)。"""
+    for f in ("alpha_scores.csv", "event_candidates.csv"):
+        p = ROOT / f
+        if p.exists():
+            try:
+                d = pd.read_csv(p)
+                if "sector" in d.columns and "ticker" in d.columns:
+                    return {str(t): str(s) for t, s in zip(d["ticker"], d["sector"])}
+            except Exception:
+                pass
+    return {}
+
+
+def _chain_tilt(sector, ben, risk):
+    """受益链条 ×1.10, 风险链条 ×0.90, 否则 1.0。返回 (乘子, 标签)。"""
+    if sector in ben:
+        return 1.10, "受益链条+"
+    if sector in risk:
+        return 0.90, "风险链条−"
+    return 1.0, ""
+
+
 # ── 主流程 ────────────────────────────────────────────────────────────────────
 def run(pool_csv="event_pool.csv") -> pd.DataFrame:
     pp = ROOT / pool_csv
@@ -290,6 +328,8 @@ def run(pool_csv="event_pool.csv") -> pd.DataFrame:
         return pd.DataFrame()
     pool = pd.read_csv(pp)
     mf = macro_filter()
+    ben, risk = _macro_chains()                          # L1 宏观链条
+    secmap = _sector_map()
     prices = None
     for f in ("sp500_price_history_deep.csv", "sp500_price_cache.csv"):
         if (ROOT / f).exists():
@@ -302,7 +342,9 @@ def run(pool_csv="event_pool.csv") -> pd.DataFrame:
             for k, v in auto_execution_components(prices, str(r["ticker"])).items():
                 if pd.isna(r.get(k, np.nan)):
                     r[k] = v
-        sc = final_event_score(r, mf)
+        sec = secmap.get(str(r["ticker"]), str(r.get("sector", "")))
+        tilt, tilt_lbl = _chain_tilt(sec, ben, risk)     # 宏观链条 → 个股倾斜
+        sc = final_event_score(r, mf * tilt)             # 个股专属宏观过滤(标量×链条倾斜)
         pool_cls = classify(r, sc["ExecutionFilter"])
         et = r.get("event_type")
         exitt = EXIT_TEMPLATES.get(et, {})
@@ -314,7 +356,8 @@ def run(pool_csv="event_pool.csv") -> pd.DataFrame:
             "exit_trade%": exitt.get("trade"), "exit_logic%": exitt.get("logic"),
             "exit_force": exitt.get("force"),
             "position_track": position_plan(pool_cls)["track"],
-            "note": r.get("note", ""),
+            "macro_chain": tilt_lbl,                          # 宏观链条倾斜(受益+/风险−)
+            "note": (str(r.get("note", "")) + (f" ·{tilt_lbl}" if tilt_lbl else "")),
         })
     df = pd.DataFrame(rows).sort_values("FinalEventScore", ascending=False).reset_index(drop=True)
     df.to_csv(ROOT / "event_candidates.csv", index=False)
