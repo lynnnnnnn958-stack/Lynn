@@ -725,6 +725,9 @@ def run_liquidity_stress_test() -> pd.DataFrame:
 
     # Load ADV (average daily dollar volume)
     vol_df = pd.read_csv(VOLUME_CACHE, index_col=0, parse_dates=True)   # 日期是无名 index 列
+    if vol_df.empty:                              # 空缓存(只有表头/无人填充)→ 优雅跳过
+        print("  volume_cache.csv is empty — skipping liquidity stress test")
+        return pd.DataFrame()
     adv = vol_df.rolling(63).mean().iloc[-1]  # 63-day average (most recent)
     adv = adv.dropna()
 
