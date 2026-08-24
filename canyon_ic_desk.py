@@ -46,6 +46,25 @@ def _load_csv(name):
         return pd.DataFrame()
 
 
+def _beat_qqq(qqq):
+    """从 qqq_angles.json 取 QQQ 基准 + 最优去偏配置(集中10只 PIT)对比。"""
+    if not qqq:
+        return {}
+    q = qqq.get("QQQ", {})
+    best = None
+    for c in qqq.get("configs", []):
+        if "集中10只" in str(c.get("label", "")):
+            best = c; break
+    if best is None and qqq.get("configs"):
+        best = max(qqq["configs"], key=lambda c: c.get("sharpe", 0))
+    return {
+        "qqq_cagr": q.get("cagr_%"), "qqq_sharpe": q.get("sharpe"), "qqq_dd": q.get("max_dd_%"),
+        "book_label": (best or {}).get("label"), "book_cagr": (best or {}).get("cagr_%"),
+        "book_sharpe": (best or {}).get("sharpe"), "book_dd": (best or {}).get("max_dd_%"),
+        "window": qqq.get("window"),
+    }
+
+
 def decide():
     macro = _load_json("macro_intel_scorecard.json")
     pos = _load_json("position_plan_summary.json")
@@ -53,6 +72,8 @@ def decide():
     edge = _load_json("edgar_event_study.json")
     book = _load_csv("concentrated_portfolio.csv")
     cand = _load_csv("event_candidates.csv")
+    fic = _load_json("fwd_ic.json")                      # ③ FES 前瞻 IC(live 验证)
+    qqq = _load_json("qqq_angles.json")                 # ② 去偏后 beat-QQQ 战绩
 
     # 验证过的事件层 edge → {事件类型: t}
     edge_t = {}
@@ -102,6 +123,11 @@ def decide():
         "concentrated_book": book_rows,
         "pool_distribution": {k: int(v) for k, v in pool_dist.items()},
         "validated_edge": edge_t,
+        "forward_ic": {                                  # ③ FES live 前瞻验证
+            "status": fic.get("status"), "ic_mean": fic.get("ic_mean"),
+            "snapshots": fic.get("snapshots_evaluated"), "verdict": fic.get("verdict"),
+        },
+        "beat_qqq": _beat_qqq(qqq),                      # ② 去偏后 concentrated vs QQQ
         "honesty": "De-biased (PIT membership): diversified ~= QQQ (15% vs 21%), but the CONCENTRATED 10-name "
                    "book beats QQQ de-biased (~24%/Sharpe1.4). Event-layer 8-K edge is real (t=4-8, survives "
                    "sector/beta neutralization) but modest; insider buying is the C-factor enhancer, not a "

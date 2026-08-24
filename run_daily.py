@@ -129,6 +129,7 @@ STEPS = [
     ("Step 388b— Insider L/S BT", "canyon_insider_ls_backtest.py",                False, 180),
     ("Step 388c— PM Desk decision","canyon_pm_desk.py",                            False,  60),
     ("Step 388d— Live calibration","canyon_insider_calibration.py",               False,  60),
+    ("Step 388e— Fwd IC (FES)",   "canyon_fwd_ic.py",                              False,  90),
     ("Step 389 — IC Desk (synth)", "canyon_ic_desk.py",                            False,  60),
     ("Step 384 — Factor Exp",    "step_factor_exposure.py",                       False,  60),
     ("Step 385 — PEAD Tracker", "step_pead_tracker.py",                           False, 120),

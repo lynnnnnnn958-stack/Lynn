@@ -5371,12 +5371,21 @@ def _ic_desk_panel() -> str:
     edge_line = (f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:10px;line-height:1.5">'
                  '<b style="color:#a89c8c">验证过的事件层 edge (8-K, 63d):</b> '
                  + " &middot; ".join(f'{_esc(k)} t={(v or {}).get("t","—")}' for k, v in edge.items()) + '</div>')
+    bq = d.get("beat_qqq", {}); fi = d.get("forward_ic", {})
+    val_line = ''
+    if bq.get("book_cagr") is not None:
+        icv = fi.get("ic_mean")
+        ics = (f'<b style="color:{C_POS if (icv or 0) > 0.02 else C_NEG}">FES前瞻IC {icv}</b> '
+               f'({fi.get("snapshots","—")}快照, 累积中)' if fi.get("status") == "LIVE" else 'FES前瞻IC 累积中')
+        val_line = (f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:6px;line-height:1.5">'
+                    f'<b style="color:#a89c8c">去偏后 beat-QQQ:</b> 集中书 {bq.get("book_cagr")}%/Sharpe{bq.get("book_sharpe")}/DD{bq.get("book_dd")}% '
+                    f'vs QQQ {bq.get("qqq_cagr")}%/{bq.get("qqq_sharpe")}/{bq.get("qqq_dd")}% &middot; {ics}</div>')
     return (f'<div style="margin-bottom:26px;background:linear-gradient(180deg,#1c1a12,#16140f);'
             f'border:1px solid {C_GOLD};border-radius:10px;padding:20px 22px">'
             f'<div style="font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">Investment Committee &middot; Today</div>'
             f'<div style="font-size:22px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK}">'
             f'Macro <b style="color:{mcol}">{_esc(mode)}</b> &mdash; {pf.get("invested_pct","—")}% invested in the concentrated event book</div>'
-            f'{macro_line}{grid}{rows}{edge_line}'
+            f'{macro_line}{grid}{rows}{edge_line}{val_line}'
             f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:12px;line-height:1.5;border-top:1px solid #241f18;padding-top:8px">'
             f'{_esc(d.get("honesty",""))}</div></div>')
 
