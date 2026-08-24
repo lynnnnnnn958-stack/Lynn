@@ -22,6 +22,9 @@ import pandas as pd
 
 ROOT = Path(__file__).parent
 FWD = 10                      # 前瞻交易日(与事件持仓期一致)
+# 简单挑战者: 事件类型倾向(2年研究t值序)主导 + 类内动量 tiebreak
+TYPEW = {"行业爆发型": 4, "商品供需错配型": 3, "企业重大事故型": 2,
+         "战争/地缘冲击型": 1.5, "第二春重估型": 1}
 
 
 def _prices():
@@ -43,47 +46,56 @@ def run():
     if px is None:
         return {"status": "no price file"}
     idx = px.index
-    ret_fwd = {}   # (date) -> forward returns per ticker
-    ics = []
+    ics, chal = [], []                                 # FES 逐快照IC / 简单挑战者IC
+    fes_top, chal_top = [], []                          # 各自 top20% 前瞻收益
     for d, g in h.groupby("date"):
         pos = idx.searchsorted(d)
-        if pos < 0 or pos + FWD >= len(idx):
-            continue                                   # 未来收益还没到 → 跳过(最近的日)
-        p0 = px.iloc[pos]; p1 = px.iloc[pos + FWD]
+        if pos < 64 or pos + FWD >= len(idx):
+            continue                                   # 需要动量回溯63天 + 前瞻窗口未到则跳过
+        p0 = px.iloc[pos]; p1 = px.iloc[pos + FWD]; pm = px.iloc[pos - 63]
         g = g.dropna(subset=["FinalEventScore"])
-        fes, fwd = [], []
+        recs = []
         for _, r in g.iterrows():
             tk = str(r["ticker"])
             if tk in px.columns:
-                a, b = p0.get(tk), p1.get(tk)
-                if pd.notna(a) and pd.notna(b) and a > 0:
-                    fes.append(float(r["FinalEventScore"])); fwd.append(b / a - 1)
-        if len(fes) >= 30:
-            ic = pd.Series(fes).corr(pd.Series(fwd), method="spearman")
-            # top-bottom 五分位差
-            df = pd.DataFrame({"fes": fes, "fwd": fwd}).sort_values("fes")
-            q = max(len(df) // 5, 1)
-            tb = df.tail(q)["fwd"].mean() - df.head(q)["fwd"].mean()
-            ics.append({"date": d.strftime("%Y-%m-%d"), "ic": round(float(ic), 4),
-                        "top_bottom_spread": round(float(tb), 4), "n": len(fes)})
+                a, b, m = p0.get(tk), p1.get(tk), pm.get(tk)
+                if pd.notna(a) and pd.notna(b) and pd.notna(m) and a > 0 and m > 0:
+                    typew = TYPEW.get(str(r["event_type"]), 1.0)
+                    recs.append({"fes": float(r["FinalEventScore"]),
+                                 "chal": typew * 100 + (a / m - 1) * 10,   # 事件类型+动量
+                                 "fwd": b / a - 1})
+        if len(recs) < 30:
+            continue
+        df = pd.DataFrame(recs)
+        q = max(len(df) // 5, 1)
+        ic_f = float(df["fes"].corr(df["fwd"], method="spearman"))
+        ic_c = float(df["chal"].corr(df["fwd"], method="spearman"))
+        ics.append({"date": d.strftime("%Y-%m-%d"), "ic": round(ic_f, 4), "n": len(df)})
+        chal.append({"date": d.strftime("%Y-%m-%d"), "ic": round(ic_c, 4)})
+        fes_top.append(float(df.nlargest(q, "fes")["fwd"].mean()))
+        chal_top.append(float(df.nlargest(q, "chal")["fwd"].mean()))
 
     out = {"as_of": pd.Timestamp.now().isoformat(), "fwd_days": FWD,
            "snapshots_evaluated": len(ics)}
     if not ics:
         out["status"] = "PENDING — snapshots exist but forward window not elapsed yet"
         return out
-    icv = np.array([x["ic"] for x in ics])
-    tbv = np.array([x["top_bottom_spread"] for x in ics])
+    icv = np.array([x["ic"] for x in ics]); cv = np.array([x["ic"] for x in chal])
     out["status"] = "LIVE"
-    out["ic_mean"] = round(float(icv.mean()), 4)
-    out["ic_t"] = round(float(icv.mean() / icv.std() * np.sqrt(len(icv))), 2) if icv.std() else None
-    out["ic_hit_rate"] = round(float((icv > 0).mean()), 3)
-    out["top_bottom_spread_mean"] = round(float(tbv.mean()), 4)
-    out["by_snapshot"] = ics
-    out["verdict"] = ("HOLDING — FES has positive forward IC" if icv.mean() > 0.02
-                      else "WEAK/NONE — FES not yet predicting forward; keep accumulating")
-    # 追加逐日历史
-    pd.DataFrame(ics).to_csv(ROOT / "fwd_ic_history.csv", index=False)
+    out["complex_fes"] = {"ic_mean": round(float(icv.mean()), 4),
+                          "top20_fwd": round(float(np.mean(fes_top)), 4),
+                          "ic_hit_rate": round(float((icv > 0).mean()), 3)}
+    out["simple_challenger"] = {"ic_mean": round(float(cv.mean()), 4),
+                                "top20_fwd": round(float(np.mean(chal_top)), 4),
+                                "ic_hit_rate": round(float((cv > 0).mean()), 3),
+                                "definition": "event-type (2yr-t order) + within-type momentum"}
+    out["winner"] = ("simple_challenger" if cv.mean() > icv.mean() else "complex_fes")
+    out["ic_mean"] = out["complex_fes"]["ic_mean"]     # 向后兼容 IC desk
+    out["verdict"] = (f"SIMPLE WINS so far ({out['simple_challenger']['ic_mean']} vs {out['complex_fes']['ic_mean']}) "
+                      "— complexity not yet earning its keep; keep accumulating"
+                      if out["winner"] == "simple_challenger"
+                      else f"COMPLEX holds ({out['complex_fes']['ic_mean']} vs {out['simple_challenger']['ic_mean']})")
+    pd.DataFrame([{**a, "chal_ic": b["ic"]} for a, b in zip(ics, chal)]).to_csv(ROOT / "fwd_ic_history.csv", index=False)
     return out
 
 
@@ -95,10 +107,12 @@ def main():
     json.dump(m, open(ROOT / "fwd_ic.json", "w"), indent=2, default=str, ensure_ascii=False)
     print(f"\n  {m.get('status','?')}")
     if m.get("status") == "LIVE":
-        print(f"  snapshots {m['snapshots_evaluated']} · fwd {m['fwd_days']}d")
-        print(f"  IC mean {m['ic_mean']}  t={m['ic_t']}  hit-rate {m['ic_hit_rate']}")
-        print(f"  top-bottom quintile spread {m['top_bottom_spread_mean']:+.2%} per {m['fwd_days']}d")
-        print(f"  → {m['verdict']}")
+        cf = m["complex_fes"]; sc = m["simple_challenger"]
+        print(f"  snapshots {m['snapshots_evaluated']} · fwd {m['fwd_days']}d\n")
+        print(f"  {'':22}{'前瞻IC':>10}{'top20%前瞻':>14}{'胜率':>8}")
+        print(f"  {'① 复杂 FES(10层)':20}{cf['ic_mean']:>+10.4f}{cf['top20_fwd']:>+13.2%}{cf['ic_hit_rate']:>8}")
+        print(f"  {'② 简单挑战者':20}{sc['ic_mean']:>+10.4f}{sc['top20_fwd']:>+13.2%}{sc['ic_hit_rate']:>8}")
+        print(f"\n  → {m['verdict']}")
     print(f"\n  → fwd_ic.json + fwd_ic_history.csv")
 
 

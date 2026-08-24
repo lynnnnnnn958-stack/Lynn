@@ -123,9 +123,10 @@ def decide():
         "concentrated_book": book_rows,
         "pool_distribution": {k: int(v) for k, v in pool_dist.items()},
         "validated_edge": edge_t,
-        "forward_ic": {                                  # ③ FES live 前瞻验证
-            "status": fic.get("status"), "ic_mean": fic.get("ic_mean"),
-            "snapshots": fic.get("snapshots_evaluated"), "verdict": fic.get("verdict"),
+        "forward_ic": {                                  # ③ live 前瞻验证 + 复杂vs简单对决
+            "status": fic.get("status"), "snapshots": fic.get("snapshots_evaluated"),
+            "complex_fes": fic.get("complex_fes"), "simple_challenger": fic.get("simple_challenger"),
+            "winner": fic.get("winner"), "verdict": fic.get("verdict"),
         },
         "beat_qqq": _beat_qqq(qqq),                      # ② 去偏后 concentrated vs QQQ
         "honesty": "De-biased (PIT membership): diversified ~= QQQ (15% vs 21%), but the CONCENTRATED 10-name "

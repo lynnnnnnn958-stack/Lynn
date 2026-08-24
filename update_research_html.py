@@ -5374,12 +5374,18 @@ def _ic_desk_panel() -> str:
     bq = d.get("beat_qqq", {}); fi = d.get("forward_ic", {})
     val_line = ''
     if bq.get("book_cagr") is not None:
-        icv = fi.get("ic_mean")
-        ics = (f'<b style="color:{C_POS if (icv or 0) > 0.02 else C_NEG}">FES前瞻IC {icv}</b> '
-               f'({fi.get("snapshots","—")}快照, 累积中)' if fi.get("status") == "LIVE" else 'FES前瞻IC 累积中')
         val_line = (f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:6px;line-height:1.5">'
                     f'<b style="color:#a89c8c">去偏后 beat-QQQ:</b> 集中书 {bq.get("book_cagr")}%/Sharpe{bq.get("book_sharpe")}/DD{bq.get("book_dd")}% '
-                    f'vs QQQ {bq.get("qqq_cagr")}%/{bq.get("qqq_sharpe")}/{bq.get("qqq_dd")}% &middot; {ics}</div>')
+                    f'vs QQQ {bq.get("qqq_cagr")}%/{bq.get("qqq_sharpe")}/{bq.get("qqq_dd")}%</div>')
+    # 前瞻对决:复杂 FES vs 简单挑战者(live 累积)
+    if fi.get("status") == "LIVE" and fi.get("complex_fes"):
+        cf = fi["complex_fes"]; sc = fi["simple_challenger"]
+        win = fi.get("winner") == "simple_challenger"
+        val_line += (f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:6px;line-height:1.6">'
+                     f'<b style="color:#a89c8c">前瞻对决 ({fi.get("snapshots","—")}快照,累积中):</b> '
+                     f'复杂FES 前瞻IC <b style="color:{C_POS if (cf.get("ic_mean") or 0)>0 else C_NEG}">{cf.get("ic_mean")}</b> '
+                     f'vs 简单版(事件类型+动量) <b style="color:{C_POS if (sc.get("ic_mean") or 0)>0 else C_NEG}">{sc.get("ic_mean")}</b> '
+                     f'&mdash; <b style="color:{C_WARN}">{"简单版暂胜(复杂度未证明加分)" if win else "复杂版暂胜"}</b></div>')
     return (f'<div style="margin-bottom:26px;background:linear-gradient(180deg,#1c1a12,#16140f);'
             f'border:1px solid {C_GOLD};border-radius:10px;padding:20px 22px">'
             f'<div style="font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">Investment Committee &middot; Today</div>'
