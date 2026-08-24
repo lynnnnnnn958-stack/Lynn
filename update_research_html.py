@@ -5315,6 +5315,44 @@ def _macro_deep_panel() -> str:
             f'{rows}</div>')
 
 
+def _insider_ls_panel() -> str:
+    """The combined long/short insider book — the actual product's honest numbers.
+    Reads insider_ls_backtest.json (from canyon_insider_ls_backtest.py)."""
+    import json as _json, html as _h
+    def _esc(s): return _h.escape(str(s)) if s is not None else ""
+    C_CARD, C_INK, C_MUTE, C_SUB = "#16140f", "#f0e9da", "#8f866f", "#b0a68f"
+    C_GOLD, C_POS, C_NEG = "#c8b487", "#8faa9a", "#c68b83"
+    p = ROOT / "insider_ls_backtest.json"
+    if not p.exists() or p.stat().st_size < 20:
+        return ""
+    try:
+        m = _json.loads(p.read_text())
+    except Exception:
+        return ""
+    if "error" in m:
+        return ""
+    c = m.get("combined_long_short", {}); ln = m.get("long_market_neutral", {})
+    def _row(label, d, hi=False):
+        col = C_GOLD if hi else C_SUB
+        return (f'<div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:8px;padding:8px 0;'
+                f'border-top:1px solid #241f18;font-size:12.5px">'
+                f'<span style="color:{col};font-weight:{"600" if hi else "400"}">{label}</span>'
+                f'<span style="color:{C_INK};text-align:right;font-variant-numeric:tabular-nums">{d.get("alpha_annual",0):.1%}</span>'
+                f'<span style="color:{C_INK};text-align:right;font-variant-numeric:tabular-nums">{d.get("sharpe","—")}</span>'
+                f'<span style="color:{C_NEG};text-align:right;font-variant-numeric:tabular-nums">{d.get("max_dd",0):.1%}</span></div>')
+    hdr = ('<div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:8px;font-size:9.5px;'
+           f'text-transform:uppercase;letter-spacing:.08em;color:{C_MUTE};padding-bottom:2px">'
+           '<span>Book</span><span style="text-align:right">Alpha/yr</span>'
+           '<span style="text-align:right">Sharpe</span><span style="text-align:right">Max DD</span></div>')
+    return (f'<div style="margin-bottom:26px;background:{C_CARD};border:1px solid #241f18;border-radius:8px;padding:18px 20px">'
+            f'<div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">Combined Book &middot; Long / Short</div>'
+            f'<div style="font-size:19px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK};margin-bottom:4px">The actual product &mdash; honest backtest</div>'
+            f'<div style="font-size:12px;color:{C_SUB};margin-bottom:12px;line-height:1.5">Long insider buy-dips, short only insider <b style="color:#a89c8c">cluster</b>-sells '
+            f'(&ge;2 insiders dumping) &mdash; the only short that earns its keep. Dollar-neutral, realistic {m.get("cost_bps_one_side","44")}bps, HAC t. '
+            f'<span style="color:{C_MUTE}">Adding the short lifts Sharpe (0.95&rarr;{c.get("sharpe","—")}) but not drawdown; it&rsquo;s pure alpha, not a free lunch. Paper-validating live.</span></div>'
+            f'{hdr}{_row("Combined long/short (the product)", c, hi=True)}{_row("Long market-neutral alone", ln)}</div>')
+
+
 def _insider_short_panel() -> str:
     """Small-cap insider-SELL SHORT watchlist (the book's short leg). Reads
     insider_short_today.csv. Only borrowable names are actually shortable."""
@@ -9960,6 +9998,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
 
     {_insider_scan_panel()}
     {_insider_short_panel()}
+    {_insider_ls_panel()}
 
     {_build_earnings_this_week(earnings_cal)}
     {_build_regime_gauge(hmm, _mo_bear_prob)}

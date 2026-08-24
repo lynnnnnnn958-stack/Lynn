@@ -126,6 +126,7 @@ STEPS = [
     ("Step 387b— Insider Sizing","canyon_insider_sizing.py",                      False,  90),
     ("Step 387c— Insider Short", "canyon_insider_short.py",                       False, 1500),
     ("Step 388 — Insider Paper", "canyon_insider_paper.py",                       False,  90),
+    ("Step 388b— Insider L/S BT", "canyon_insider_ls_backtest.py",                False, 180),
     ("Step 384 — Factor Exp",    "step_factor_exposure.py",                       False,  60),
     ("Step 385 — PEAD Tracker", "step_pead_tracker.py",                           False, 120),
     ("Step 386 — Famous 13F",   "step_famous_holdings.py",                        False, 300),

@@ -169,6 +169,8 @@ def run():
         try:
             sw = pd.read_csv(sp)
             sw = sw[sw.get("tradable_short", False) == True]       # 只做可借的
+            if "cluster" in sw.columns and sw["cluster"].any():    # 且只做集中卖出(验证过唯一值得的空头)
+                sw = sw[sw["cluster"] == True]
         except Exception:
             sw = pd.DataFrame()
         if not sw.empty:
