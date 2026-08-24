@@ -5330,6 +5330,14 @@ def _ic_desk_panel() -> str:
         d = _json.loads(p.read_text())
     except Exception:
         return ""
+    _EN = {"进攻": "Aggressive", "中性": "Neutral", "防守": "Defensive",
+           "行业爆发型": "Sector Breakout", "第二春重估型": "Revaluation",
+           "企业重大事故型": "Corporate Incident", "商品供需错配型": "Commodity Imbalance",
+           "战争/地缘冲击型": "War/Geopolitical", "自然灾变型": "Natural Disaster",
+           "战争/地缘风险": "War/Geopolitical", "关税/制裁/监管": "Tariffs/Sanctions",
+           "流动性/利率/美元": "Liquidity/Rates", "行业CapEx/景气": "Sector CapEx",
+           "商品供需/运输": "Commodity/Transport", "事故/灾变/供应链": "Incident/Disaster"}
+    def _t(x): return _EN.get(str(x), str(x))
     m = d.get("macro", {}); pf = d.get("portfolio", {}); book = d.get("concentrated_book", [])
     edge = d.get("validated_edge", {})
     mode = m.get("mode", "—")
@@ -5339,21 +5347,19 @@ def _ic_desk_panel() -> str:
         return (f'<div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.07em;color:{C_MUTE}">{label}</div>'
                 f'<div style="font-size:18px;color:{col};font-family:\'Baskerville\',Georgia,serif;font-variant-numeric:tabular-nums">{val}</div></div>')
     grid = ('<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:14px 0 6px">'
-            + stat("宏观模式", _esc(mode), mcol)
-            + stat("仓位制度", _esc(m.get("position_regime", "—")), C_GOLD)
-            + stat("已投 / 现金", f"{pf.get('invested_pct','—')}% / {pf.get('cash_pct','—')}%")
-            + stat("组合波动", f"{(pf.get('portfolio_vol') or 0)*100:.1f}%" if pf.get('portfolio_vol') else "—")
-            + stat("往返摩擦", f"{pf.get('roundtrip_bps','—')}bps") + '</div>')
-    # 宏观链条
+            + stat("Macro mode", _esc(_t(mode)), mcol)
+            + stat("Position regime", _esc(m.get("position_regime", "—")), C_GOLD)
+            + stat("Invested / Cash", f"{pf.get('invested_pct','—')}% / {pf.get('cash_pct','—')}%")
+            + stat("Portfolio vol", f"{(pf.get('portfolio_vol') or 0)*100:.1f}%" if pf.get('portfolio_vol') else "—")
+            + stat("Round-trip cost", f"{pf.get('roundtrip_bps','—')}bps") + '</div>')
     ben = ", ".join(_esc(x) for x in (m.get("beneficiary_chains") or [])[:4])
     rsk = ", ".join(_esc(x) for x in (m.get("risk_chains") or [])[:3])
-    pools = ", ".join(_esc(x) for x in (m.get("active_event_pools") or [])[:3])
-    hot = " · ".join(f"{_esc(k)} {v}" for k, v in (m.get("hot_modules") or {}).items() if v and v >= 3)
+    pools = ", ".join(_esc(_t(x)) for x in (m.get("active_event_pools") or [])[:3])
+    hot = " · ".join(f"{_esc(_t(k))} {v}" for k, v in (m.get("hot_modules") or {}).items() if v and v >= 3)
     macro_line = (f'<div style="font-size:11.5px;color:{C_SUB};line-height:1.6;margin-top:4px">'
-                  f'<b style="color:{C_POS}">受益链条</b> {ben} &middot; <b style="color:{C_NEG}">风险链条</b> {rsk}<br>'
-                  f'<b style="color:#a89c8c">激活事件池</b> {pools} &middot; <b style="color:#a89c8c">热点</b> {hot} &middot; '
-                  f'FRED压力 {m.get("fred_stress","—")}</div>')
-    # 集中书表
+                  f'<b style="color:{C_POS}">Beneficiary sectors</b> {ben} &middot; <b style="color:{C_NEG}">Risk sectors</b> {rsk}<br>'
+                  f'<b style="color:#a89c8c">Active event pools</b> {pools} &middot; <b style="color:#a89c8c">News heat</b> {hot} &middot; '
+                  f'FRED stress {m.get("fred_stress","—")}</div>')
     rows = ('<div style="display:grid;grid-template-columns:1fr 0.6fr 1.4fr 0.8fr;gap:6px;font-size:9.5px;'
             f'text-transform:uppercase;letter-spacing:.06em;color:{C_MUTE};margin-top:12px;padding-bottom:3px;border-bottom:1px solid #241f18">'
             '<span>Ticker</span><span style="text-align:right">Wt</span><span>Event type</span><span style="text-align:right">Edge t</span></div>')
@@ -5366,31 +5372,30 @@ def _ic_desk_panel() -> str:
                  f'<span style="color:{C_INK};font-weight:600">{_esc(r.get("ticker"))}'
                  f'<span style="color:{C_MUTE};font-size:10px;font-weight:400"> {_esc(str(r.get("sector",""))[:14])}</span></span>'
                  f'<span style="color:{C_GOLD};text-align:right;font-variant-numeric:tabular-nums">{r.get("weight_pct",0)}%</span>'
-                 f'<span style="color:{C_SUB}">{_esc(r.get("event_type"))} &middot; FES {r.get("FES",0):.0f}</span>'
+                 f'<span style="color:{C_SUB}">{_esc(_t(r.get("event_type")))} &middot; FES {r.get("FES",0):.0f}</span>'
                  f'<span style="text-align:right">{et_s}</span></div>')
     edge_line = (f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:10px;line-height:1.5">'
-                 '<b style="color:#a89c8c">验证过的事件层 edge (8-K, 63d):</b> '
-                 + " &middot; ".join(f'{_esc(k)} t={(v or {}).get("t","—")}' for k, v in edge.items()) + '</div>')
+                 '<b style="color:#a89c8c">Validated event-layer edge (8-K, 63d):</b> '
+                 + " &middot; ".join(f'{_esc(_t(k))} t={(v or {}).get("t","—")}' for k, v in edge.items()) + '</div>')
     bq = d.get("beat_qqq", {}); fi = d.get("forward_ic", {})
     val_line = ''
     if bq.get("book_cagr") is not None:
         val_line = (f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:6px;line-height:1.5">'
-                    f'<b style="color:#a89c8c">去偏后 beat-QQQ:</b> 集中书 {bq.get("book_cagr")}%/Sharpe{bq.get("book_sharpe")}/DD{bq.get("book_dd")}% '
+                    f'<b style="color:#a89c8c">De-biased vs QQQ:</b> book {bq.get("book_cagr")}%/Sharpe{bq.get("book_sharpe")}/DD{bq.get("book_dd")}% '
                     f'vs QQQ {bq.get("qqq_cagr")}%/{bq.get("qqq_sharpe")}/{bq.get("qqq_dd")}%</div>')
-    # 前瞻对决:复杂 FES vs 简单挑战者(live 累积)
     if fi.get("status") == "LIVE" and fi.get("complex_fes"):
         cf = fi["complex_fes"]; sc = fi["simple_challenger"]
         win = fi.get("winner") == "simple_challenger"
         val_line += (f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:6px;line-height:1.6">'
-                     f'<b style="color:#a89c8c">前瞻对决 ({fi.get("snapshots","—")}快照,累积中):</b> '
-                     f'复杂FES 前瞻IC <b style="color:{C_POS if (cf.get("ic_mean") or 0)>0 else C_NEG}">{cf.get("ic_mean")}</b> '
-                     f'vs 简单版(事件类型+动量) <b style="color:{C_POS if (sc.get("ic_mean") or 0)>0 else C_NEG}">{sc.get("ic_mean")}</b> '
-                     f'&mdash; <b style="color:{C_WARN}">{"简单版暂胜(复杂度未证明加分)" if win else "复杂版暂胜"}</b></div>')
+                     f'<b style="color:#a89c8c">Forward duel ({fi.get("snapshots","—")} snapshots, accruing):</b> '
+                     f'complex FES fwd-IC <b style="color:{C_POS if (cf.get("ic_mean") or 0)>0 else C_NEG}">{cf.get("ic_mean")}</b> '
+                     f'vs simple (event-type + momentum) <b style="color:{C_POS if (sc.get("ic_mean") or 0)>0 else C_NEG}">{sc.get("ic_mean")}</b> '
+                     f'&mdash; <b style="color:{C_WARN}">{"simple leads (complexity unproven)" if win else "complex leads"}</b></div>')
     return (f'<div style="margin-bottom:26px;background:linear-gradient(180deg,#1c1a12,#16140f);'
             f'border:1px solid {C_GOLD};border-radius:10px;padding:20px 22px">'
             f'<div style="font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">Investment Committee &middot; Today</div>'
             f'<div style="font-size:22px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK}">'
-            f'Macro <b style="color:{mcol}">{_esc(mode)}</b> &mdash; {pf.get("invested_pct","—")}% invested in the concentrated event book</div>'
+            f'Macro <b style="color:{mcol}">{_esc(_t(mode))}</b> &mdash; {pf.get("invested_pct","—")}% invested in the concentrated event book</div>'
             f'{macro_line}{grid}{rows}{edge_line}{val_line}'
             f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:12px;line-height:1.5;border-top:1px solid #241f18;padding-top:8px">'
             f'{_esc(d.get("honesty",""))}</div></div>')
