@@ -102,25 +102,66 @@ def _expected():
         return {}
 
 
+# regime → 多空倾斜(净敞口方向)。市场中性是验证过的核心; 倾斜是"酌情叠加", 幅度小。
+_TILT = {"AGGRESSIVE": 0.55, "NEUTRAL": 0.50, "DEFENSIVE": 0.42}   # long 权重
+MAX_NAME_PCT = 0.08          # 单只上限
+MAX_SECTOR_PCT = 0.35        # 单行业上限(有数据时)
+
+
+def _risk_checks(longs, shorts, long_usd):
+    """组合层风控: 名字重叠、集中度、单只上限。行业集中度待 SIC 缓存。"""
+    lt = set(longs["ticker"].astype(str)) if longs is not None and len(longs) else set()
+    st = set(shorts["ticker"].astype(str)) if shorts is not None and len(shorts) else set()
+    checks, flags = {}, []
+    overlap = lt & st
+    checks["long_short_overlap"] = sorted(overlap)
+    if overlap:
+        flags.append(f"CONFLICT: {len(overlap)} name(s) both long & short")
+    # 集中度: 前5多头占多头账本比例
+    if longs is not None and "size_usd" in getattr(longs, "columns", []) and long_usd > 0:
+        top5 = float(longs.nlargest(5, "size_usd")["size_usd"].sum())
+        maxn = float(longs["size_usd"].max())
+        checks["top5_long_pct"] = round(top5 / longs["size_usd"].sum(), 3)
+        checks["max_name_pct"] = round(maxn / longs["size_usd"].sum(), 3)
+        if maxn / longs["size_usd"].sum() > MAX_NAME_PCT * 1.5:
+            flags.append(f"single name {maxn/longs['size_usd'].sum():.0%} > cap")
+    checks["sector_concentration"] = "n/a — no small-cap sector data (SIC cache pending)"
+    checks["breaches"] = flags
+    checks["ok"] = len(flags) == 0
+    return checks
+
+
 def decide():
     reg = _regime()
     longs, shorts = _book()
     exp = _expected()
+    # 冲突解决: 同时被买入和集中卖出的票 = 信号矛盾 → 两边都剔除, 回避
+    conflicts = []
+    if longs is not None and shorts is not None and len(longs) and len(shorts):
+        lt = set(longs["ticker"].astype(str)); st = set(shorts["ticker"].astype(str))
+        conflicts = sorted(lt & st)
+        if conflicts:
+            longs = longs[~longs["ticker"].astype(str).isin(conflicts)]
+            shorts = shorts[~shorts["ticker"].astype(str).isin(conflicts)]
     gross = reg["gross_pct"]
     n_long = int(len(longs)) if longs is not None else 0
     n_short = int(len(shorts)) if shorts is not None else 0
-    # 无杠杆、多空对半(匹配验证过的 0.5L-0.5S 中性组合): gross 占 sleeve, 一半多一半空
-    half = SLEEVE * gross / 2.0
-    long_usd = half
-    short_usd = min(half, n_short * 8000)              # 集中卖出稀少 → 空头可能不足半, 则净多头
+    # regime 决定多空倾斜: 进攻略偏多、防守偏空(但主体仍中性)
+    lw = _TILT.get(reg["posture"], 0.50)
+    gross_usd_target = SLEEVE * gross
+    long_usd = gross_usd_target * lw
+    short_cap = n_short * 8000                          # 集中卖出稀少 → 空头容量有限
+    short_usd = min(gross_usd_target * (1 - lw), short_cap)
     gross_usd = long_usd + short_usd
     net_usd = long_usd - short_usd
+    risk = _risk_checks(longs, shorts, long_usd)
     return {
         "as_of": pd.Timestamp.now().isoformat(),
         "regime": reg,
         "decision": {
             "posture": reg["posture"],
             "gross_target_pct": gross,
+            "long_tilt_pct": round(lw, 2),
             "sleeve_usd": SLEEVE,
             "gross_deployed_usd": round(gross_usd, 0),
             "cash_reserve_usd": round(SLEEVE - gross_usd, 0) if gross_usd < SLEEVE else 0,
@@ -130,11 +171,13 @@ def decide():
             "net_pct_of_sleeve": round(net_usd / SLEEVE, 3),
             "market_neutral": bool(abs(net_usd) < 0.1 * SLEEVE),
         },
+        "portfolio_risk": {**risk, "conflicts_resolved": conflicts},
         "expected_book": exp,
         "top_longs": (longs.head(5)["ticker"].tolist() if n_long else []),
         "cluster_shorts": (shorts.head(5)["ticker"].tolist() if n_short else []),
-        "honesty": "Only the insider L/S is validated alpha. Macro = exposure dial, not alpha. "
-                   "Other 20 panels inform discretion, not the mechanical decision. Paper-validating live.",
+        "honesty": "Only the insider L/S is validated alpha. Macro = exposure dial. The L/S tilt is a "
+                   "small discretionary regime overlay (not validated). Other panels inform discretion. "
+                   "Paper-validating live; sector-concentration cap pending a SIC cache.",
     }
 
 
@@ -153,7 +196,13 @@ def main():
     print(f"    LONG  {dec['long_names']} names  ${dec['long_usd']:,.0f}")
     print(f"    SHORT {dec['short_names']} cluster-sells  ${dec['short_usd']:,.0f}")
     _neu = "market-neutral" if dec['market_neutral'] else f"net long {dec['net_pct_of_sleeve']:+.0%}"
-    print(f"    net exposure ${dec['net_exposure_usd']:,.0f} ({_neu})")
+    print(f"    net exposure ${dec['net_exposure_usd']:,.0f} ({_neu}) · long-tilt {dec['long_tilt_pct']:.0%}")
+    rk = d.get("portfolio_risk", {})
+    conf = rk.get("conflicts_resolved", [])
+    print(f"\n  RISK: {'✓ all clear' if rk.get('ok') else '⚠ ' + '; '.join(rk.get('breaches', []))}")
+    if conf:
+        print(f"    ⚑ 剔除 {len(conf)} 只信号冲突(既被买又被集中卖): {', '.join(conf)}")
+    print(f"    top-5 长仓集中度 {rk.get('top5_long_pct','—')} · 单只上限 {rk.get('max_name_pct','—')}")
     if e:
         print(f"\n  EXPECTED (backtest): alpha {e.get('alpha_annual',0):+.1%}  "
               f"Sharpe {e.get('sharpe','—')}  MaxDD {e.get('max_dd',0):.1%}")

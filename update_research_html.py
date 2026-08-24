@@ -5330,6 +5330,7 @@ def _pm_desk_panel() -> str:
     except Exception:
         return ""
     reg = d.get("regime", {}); dec = d.get("decision", {}); e = d.get("expected_book", {})
+    rk = d.get("portfolio_risk", {})
     posture = dec.get("posture", "—")
     pcol = C_POS if posture == "AGGRESSIVE" else (C_WARN if posture == "NEUTRAL" else C_NEG)
     reasons = " &middot; ".join(_esc(r) for r in reg.get("reasons", []))
@@ -5348,14 +5349,20 @@ def _pm_desk_panel() -> str:
     book = (f'<div style="font-size:12.5px;color:{C_SUB};line-height:1.6;margin-top:8px">'
             f'<b style="color:{C_POS}">LONG</b> ${dec.get("long_usd",0):,.0f} &mdash; {tl}<br>'
             f'<b style="color:{C_NEG}">SHORT</b> ${dec.get("short_usd",0):,.0f} (cluster-sells) &mdash; {ts}<br>'
-            f'<span style="color:{C_MUTE}">Net ${dec.get("net_exposure_usd",0):,.0f} ({nm}) &middot; cash '
+            f'<span style="color:{C_MUTE}">Net ${dec.get("net_exposure_usd",0):,.0f} ({nm}, long-tilt {dec.get("long_tilt_pct",0.5):.0%}) &middot; cash '
             f'${dec.get("cash_reserve_usd",0):,.0f} &middot; expected alpha {e.get("alpha_annual",0):+.1%}, MaxDD {e.get("max_dd",0):.0%}</span></div>')
+    _conf = rk.get("conflicts_resolved", [])
+    risk_line = (f'<div style="font-size:11px;color:{C_MUTE};margin-top:8px">'
+                 f'<b style="color:{C_POS if rk.get("ok") else C_NEG}">Risk {"✓ clear" if rk.get("ok") else "⚠ breach"}</b> &middot; '
+                 f'top-5 concentration {rk.get("top5_long_pct","—")} &middot; max name {rk.get("max_name_pct","—")}'
+                 + (f' &middot; dropped {len(_conf)} conflicting ({_esc(", ".join(_conf))})' if _conf else '')
+                 + f' &middot; sector cap: {_esc(rk.get("sector_concentration",""))[:38]}</div>')
     return (f'<div style="margin-bottom:26px;background:linear-gradient(180deg,#1b1a12,#16140f);'
             f'border:1px solid {C_GOLD};border-radius:10px;padding:20px 22px">'
             f'<div style="font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">PM Desk &middot; Today\'s Decision</div>'
             f'<div style="font-size:22px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK}">Regime <b style="color:{pcol}">{posture}</b> &mdash; deploy {dec.get("gross_target_pct",0):.0%} to the insider long/short</div>'
             f'<div style="font-size:11px;color:{C_MUTE};margin-top:3px">{reasons}</div>'
-            f'{grid}{book}'
+            f'{grid}{book}{risk_line}'
             f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:12px;line-height:1.5;border-top:1px solid #241f18;padding-top:8px">'
             f'Only the insider L/S is validated alpha; macro is the exposure dial, not alpha; the other panels inform discretion. '
             f'Market-neutral (beta&asymp;0) but still scaled down in bad regimes (right-tail strategy). Paper-validating live.</div></div>')
