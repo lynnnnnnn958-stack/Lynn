@@ -133,11 +133,14 @@ def _risk_checks(longs, shorts, long_usd):
             smap = dict(zip(sm["ticker"].astype(str), sm["sector"].astype(str)))
             lg = longs.copy(); lg["sector"] = lg["ticker"].astype(str).map(smap).fillna("Unknown")
             by_sec = lg.groupby("sector")["size_usd"].sum() / lg["size_usd"].sum()
-            top_sec = by_sec.idxmax(); top_pct = float(by_sec.max())
-            checks["top_sector"] = f"{top_sec} {top_pct:.0%}"
             checks["sector_breakdown"] = {k: round(float(v), 3) for k, v in by_sec.sort_values(ascending=False).head(5).items()}
-            if top_pct > MAX_SECTOR_PCT:
-                flags.append(f"sector {top_sec} {top_pct:.0%} > {MAX_SECTOR_PCT:.0%} cap")
+            known = by_sec.drop(labels=["Unknown"], errors="ignore")   # 缺失数据不算集中度
+            unk = float(by_sec.get("Unknown", 0))
+            if len(known):
+                top_sec = known.idxmax(); top_pct = float(known.max())
+                checks["top_sector"] = f"{top_sec} {top_pct:.0%}" + (f" ({unk:.0%} unclassified)" if unk > 0.1 else "")
+                if top_pct > MAX_SECTOR_PCT:
+                    flags.append(f"sector {top_sec} {top_pct:.0%} > {MAX_SECTOR_PCT:.0%} cap")
         except Exception:
             checks["top_sector"] = "n/a"
     else:
