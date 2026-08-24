@@ -200,8 +200,10 @@ def _edge_map():
                 for et, v in j.items():
                     sn = v.get("sector_neutral") or v.get("market_adj")
                     if sn and sn.get("n", 0) >= 50 and abs(sn.get("t", 0)) >= 2:
-                        ret = float(sn["mean_ab_%"])           # 行业中性超额(%)
-                        _EDGE[et] = float(np.clip(1.0 + (ret / 3.0) * 0.15, 1.0, 1.15))
+                        t = float(sn.get("t", 0)); ret = float(sn["mean_ab_%"])
+                        # t值(可靠度)主导 + 收益辅助; 拉大区分度(1.0~1.25)。
+                        # 行业爆发 t6.4→~1.20, 第二春 t4.1→~1.10, 企业事故 t2.7→~1.09
+                        _EDGE[et] = float(np.clip(1.0 + (t - 2) * 0.04 + (ret / 3.0) * 0.05, 1.0, 1.25))
             except Exception:
                 pass
     return _EDGE
@@ -212,7 +214,7 @@ def edge_factor(row: pd.Series) -> float:
     em = _edge_map()
     if not em:
         return 1.0
-    return em.get(row.get("event_type"), 0.97)
+    return em.get(row.get("event_type"), 0.95)     # 未证事件类型 → 诚实折价
 
 
 def final_event_score(row: pd.Series, macro_filter: float) -> dict:
@@ -313,11 +315,13 @@ def _sector_map():
 
 
 def _chain_tilt(sector, ben, risk):
-    """受益链条 ×1.10, 风险链条 ×0.90, 否则 1.0。返回 (乘子, 标签)。"""
+    """受益链条 ×1.05, 风险链条 ×0.95, 否则 1.0。返回 (乘子, 标签)。
+    刻意温和(±5%): 前瞻诊断显示宏观受益链条(医疗/金融=第二春)前瞻反而弱,
+    验证过的事件层 edge(行业爆发 t=6.4)更可靠 → 宏观只做小 nudge, 不盖过 edge。"""
     if sector in ben:
-        return 1.10, "受益链条+"
+        return 1.05, "受益链条+"
     if sector in risk:
-        return 0.90, "风险链条−"
+        return 0.95, "风险链条−"
     return 1.0, ""
 
 
