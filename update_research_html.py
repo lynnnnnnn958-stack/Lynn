@@ -5315,6 +5315,72 @@ def _macro_deep_panel() -> str:
             f'{rows}</div>')
 
 
+def _ic_desk_panel() -> str:
+    """Investment Committee — the ONE decision across the full 10-layer event OS.
+    Reads ic_decision.json (from canyon_ic_desk.py): macro L1 -> event selection ->
+    concentrated book -> validated edge. This is the flagship institutional view."""
+    import json as _json, html as _h
+    def _esc(s): return _h.escape(str(s)) if s is not None else ""
+    C_CARD, C_INK, C_MUTE, C_SUB = "#16140f", "#f0e9da", "#8f866f", "#b0a68f"
+    C_GOLD, C_POS, C_NEG, C_WARN = "#c8b487", "#8faa9a", "#c68b83", "#cdbd8f"
+    p = ROOT / "ic_decision.json"
+    if not p.exists() or p.stat().st_size < 20:
+        return ""
+    try:
+        d = _json.loads(p.read_text())
+    except Exception:
+        return ""
+    m = d.get("macro", {}); pf = d.get("portfolio", {}); book = d.get("concentrated_book", [])
+    edge = d.get("validated_edge", {})
+    mode = m.get("mode", "—")
+    mcol = C_POS if mode == "进攻" else (C_WARN if mode == "中性" else C_NEG)
+
+    def stat(label, val, col=C_INK):
+        return (f'<div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.07em;color:{C_MUTE}">{label}</div>'
+                f'<div style="font-size:18px;color:{col};font-family:\'Baskerville\',Georgia,serif;font-variant-numeric:tabular-nums">{val}</div></div>')
+    grid = ('<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:14px 0 6px">'
+            + stat("宏观模式", _esc(mode), mcol)
+            + stat("仓位制度", _esc(m.get("position_regime", "—")), C_GOLD)
+            + stat("已投 / 现金", f"{pf.get('invested_pct','—')}% / {pf.get('cash_pct','—')}%")
+            + stat("组合波动", f"{(pf.get('portfolio_vol') or 0)*100:.1f}%" if pf.get('portfolio_vol') else "—")
+            + stat("往返摩擦", f"{pf.get('roundtrip_bps','—')}bps") + '</div>')
+    # 宏观链条
+    ben = ", ".join(_esc(x) for x in (m.get("beneficiary_chains") or [])[:4])
+    rsk = ", ".join(_esc(x) for x in (m.get("risk_chains") or [])[:3])
+    pools = ", ".join(_esc(x) for x in (m.get("active_event_pools") or [])[:3])
+    hot = " · ".join(f"{_esc(k)} {v}" for k, v in (m.get("hot_modules") or {}).items() if v and v >= 3)
+    macro_line = (f'<div style="font-size:11.5px;color:{C_SUB};line-height:1.6;margin-top:4px">'
+                  f'<b style="color:{C_POS}">受益链条</b> {ben} &middot; <b style="color:{C_NEG}">风险链条</b> {rsk}<br>'
+                  f'<b style="color:#a89c8c">激活事件池</b> {pools} &middot; <b style="color:#a89c8c">热点</b> {hot} &middot; '
+                  f'FRED压力 {m.get("fred_stress","—")}</div>')
+    # 集中书表
+    rows = ('<div style="display:grid;grid-template-columns:1fr 0.6fr 1.4fr 0.8fr;gap:6px;font-size:9.5px;'
+            f'text-transform:uppercase;letter-spacing:.06em;color:{C_MUTE};margin-top:12px;padding-bottom:3px;border-bottom:1px solid #241f18">'
+            '<span>Ticker</span><span style="text-align:right">Wt</span><span>Event type</span><span style="text-align:right">Edge t</span></div>')
+    for r in book[:10]:
+        et = r.get("edge_t")
+        et_s = (f'<span style="color:{C_POS}">t={et:+.1f}</span>' if isinstance(et, (int, float))
+                else '<span style="color:#8f866f">untested</span>')
+        rows += (f'<div style="display:grid;grid-template-columns:1fr 0.6fr 1.4fr 0.8fr;gap:6px;padding:6px 0;'
+                 f'border-bottom:1px solid #1e1a13;font-size:12.5px;align-items:baseline">'
+                 f'<span style="color:{C_INK};font-weight:600">{_esc(r.get("ticker"))}'
+                 f'<span style="color:{C_MUTE};font-size:10px;font-weight:400"> {_esc(str(r.get("sector",""))[:14])}</span></span>'
+                 f'<span style="color:{C_GOLD};text-align:right;font-variant-numeric:tabular-nums">{r.get("weight_pct",0)}%</span>'
+                 f'<span style="color:{C_SUB}">{_esc(r.get("event_type"))} &middot; FES {r.get("FES",0):.0f}</span>'
+                 f'<span style="text-align:right">{et_s}</span></div>')
+    edge_line = (f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:10px;line-height:1.5">'
+                 '<b style="color:#a89c8c">验证过的事件层 edge (8-K, 63d):</b> '
+                 + " &middot; ".join(f'{_esc(k)} t={(v or {}).get("t","—")}' for k, v in edge.items()) + '</div>')
+    return (f'<div style="margin-bottom:26px;background:linear-gradient(180deg,#1c1a12,#16140f);'
+            f'border:1px solid {C_GOLD};border-radius:10px;padding:20px 22px">'
+            f'<div style="font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">Investment Committee &middot; Today</div>'
+            f'<div style="font-size:22px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK}">'
+            f'Macro <b style="color:{mcol}">{_esc(mode)}</b> &mdash; {pf.get("invested_pct","—")}% invested in the concentrated event book</div>'
+            f'{macro_line}{grid}{rows}{edge_line}'
+            f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:12px;line-height:1.5;border-top:1px solid #241f18;padding-top:8px">'
+            f'{_esc(d.get("honesty",""))}</div></div>')
+
+
 def _pm_desk_panel() -> str:
     """PM Desk — the ONE integrated daily decision (alpha x regime x risk).
     Reads pm_desk_decision.json (from canyon_pm_desk.py)."""
@@ -10049,6 +10115,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
       </div>
     </div>
 
+    {_ic_desk_panel()}
     {_pm_desk_panel()}
     {_insider_scan_panel()}
     {_insider_short_panel()}
