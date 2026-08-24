@@ -31,8 +31,9 @@ _sn = lambda x: re.sub(r"\{[^}]+\}", "", x)
 
 
 MAX_FORM4_PER_TICKER = int(os.environ.get("MAX_F4", "100000"))   # cap for fast subset tests
-OUT = (ROOT / "smallcap_form4_sells.csv") if os.environ.get("INSIDER_SIDE") == "SELL" \
-      else (ROOT / "smallcap_form4_buys_full.csv")   # deep-history output
+OUT = (ROOT / os.environ["OUT_FILE"]) if os.environ.get("OUT_FILE") \
+      else ((ROOT / "smallcap_form4_sells.csv") if os.environ.get("INSIDER_SIDE") == "SELL"
+            else (ROOT / "smallcap_form4_buys_full.csv"))   # deep-history output
 
 
 def _new_session():
@@ -72,8 +73,16 @@ def _val(el):
 
 
 def universe():
-    df = pd.read_csv(ROOT / "sp600_smallcap_universe.csv")
-    return sorted(df["ticker"].astype(str).str.upper().unique())
+    """默认 S&P600 小盘; UNIVERSE_FILE 环境变量可指向别的名单(大盘/中盘)。"""
+    f = os.environ.get("UNIVERSE_FILE", "sp600_smallcap_universe.csv")
+    p = ROOT / f
+    if f.endswith(".json"):
+        j = json.loads(p.read_text())
+        tks = j.get("tickers", j) if isinstance(j, dict) else j
+        return sorted({str(t).upper() for t in tks})
+    df = pd.read_csv(p)
+    col = "ticker" if "ticker" in df.columns else df.columns[0]
+    return sorted(df[col].astype(str).str.upper().unique())
 
 
 def cikmap(tks):
