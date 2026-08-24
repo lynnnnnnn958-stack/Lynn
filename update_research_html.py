@@ -5315,6 +5315,52 @@ def _macro_deep_panel() -> str:
             f'{rows}</div>')
 
 
+def _pm_desk_panel() -> str:
+    """PM Desk — the ONE integrated daily decision (alpha x regime x risk).
+    Reads pm_desk_decision.json (from canyon_pm_desk.py)."""
+    import json as _json, html as _h
+    def _esc(s): return _h.escape(str(s)) if s is not None else ""
+    C_CARD, C_INK, C_MUTE, C_SUB = "#16140f", "#f0e9da", "#8f866f", "#b0a68f"
+    C_GOLD, C_POS, C_NEG, C_WARN = "#c8b487", "#8faa9a", "#c68b83", "#cdbd8f"
+    p = ROOT / "pm_desk_decision.json"
+    if not p.exists() or p.stat().st_size < 20:
+        return ""
+    try:
+        d = _json.loads(p.read_text())
+    except Exception:
+        return ""
+    reg = d.get("regime", {}); dec = d.get("decision", {}); e = d.get("expected_book", {})
+    posture = dec.get("posture", "—")
+    pcol = C_POS if posture == "AGGRESSIVE" else (C_WARN if posture == "NEUTRAL" else C_NEG)
+    reasons = " &middot; ".join(_esc(r) for r in reg.get("reasons", []))
+    tl = ", ".join(_esc(t) for t in d.get("top_longs", [])[:5])
+    ts = ", ".join(_esc(t) for t in d.get("cluster_shorts", [])[:5]) or "(none today)"
+
+    def stat(label, val, col=C_INK):
+        return (f'<div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;color:{C_MUTE}">{label}</div>'
+                f'<div style="font-size:19px;color:{col};font-family:\'Baskerville\',Georgia,serif;font-variant-numeric:tabular-nums">{val}</div></div>')
+    nm = "Market-neutral" if dec.get("market_neutral") else f"Net long {dec.get('net_pct_of_sleeve',0):+.0%}"
+    grid = ('<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:14px 0 4px">'
+            + stat("Posture", posture, pcol)
+            + stat("Gross", f"{dec.get('gross_target_pct',0):.0%}", C_GOLD)
+            + stat("Book", f"{dec.get('long_names',0)}L / {dec.get('short_names',0)}S")
+            + stat("Exp. Sharpe", e.get("sharpe", "—"), C_POS) + '</div>')
+    book = (f'<div style="font-size:12.5px;color:{C_SUB};line-height:1.6;margin-top:8px">'
+            f'<b style="color:{C_POS}">LONG</b> ${dec.get("long_usd",0):,.0f} &mdash; {tl}<br>'
+            f'<b style="color:{C_NEG}">SHORT</b> ${dec.get("short_usd",0):,.0f} (cluster-sells) &mdash; {ts}<br>'
+            f'<span style="color:{C_MUTE}">Net ${dec.get("net_exposure_usd",0):,.0f} ({nm}) &middot; cash '
+            f'${dec.get("cash_reserve_usd",0):,.0f} &middot; expected alpha {e.get("alpha_annual",0):+.1%}, MaxDD {e.get("max_dd",0):.0%}</span></div>')
+    return (f'<div style="margin-bottom:26px;background:linear-gradient(180deg,#1b1a12,#16140f);'
+            f'border:1px solid {C_GOLD};border-radius:10px;padding:20px 22px">'
+            f'<div style="font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:{C_GOLD};margin-bottom:2px">PM Desk &middot; Today\'s Decision</div>'
+            f'<div style="font-size:22px;font-family:\'Baskerville\',Georgia,serif;color:{C_INK}">Regime <b style="color:{pcol}">{posture}</b> &mdash; deploy {dec.get("gross_target_pct",0):.0%} to the insider long/short</div>'
+            f'<div style="font-size:11px;color:{C_MUTE};margin-top:3px">{reasons}</div>'
+            f'{grid}{book}'
+            f'<div style="font-size:10.5px;color:{C_MUTE};margin-top:12px;line-height:1.5;border-top:1px solid #241f18;padding-top:8px">'
+            f'Only the insider L/S is validated alpha; macro is the exposure dial, not alpha; the other panels inform discretion. '
+            f'Market-neutral (beta&asymp;0) but still scaled down in bad regimes (right-tail strategy). Paper-validating live.</div></div>')
+
+
 def _insider_ls_panel() -> str:
     """The combined long/short insider book — the actual product's honest numbers.
     Reads insider_ls_backtest.json (from canyon_insider_ls_backtest.py)."""
@@ -9996,6 +10042,7 @@ def build_html(daily: dict, chart: dict, summ: dict,
       </div>
     </div>
 
+    {_pm_desk_panel()}
     {_insider_scan_panel()}
     {_insider_short_panel()}
     {_insider_ls_panel()}
