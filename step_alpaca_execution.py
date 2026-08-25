@@ -84,8 +84,9 @@ BOOKS = {
     "MEDIUM": {
         "n_picks":          15,
         "rebalance_days":   10,
-        "score_file":       "ml_alpha_scores.csv",
-        "score_col":        "ml_medium",
+        # 复活动量为活因子: ml_medium(死ML因子) → exec_score(事件×动量, 前瞻对决证明最强)
+        "score_file":       "event_candidates.csv",
+        "score_col":        "exec_score",
         "capital_pct":      0.30,
         "position_cap":     0.12,
         "earnings_filter":  False,
@@ -93,10 +94,10 @@ BOOKS = {
     "LONG": {
         "n_picks":          20,
         "rebalance_days":   21,
-        # 三脑合一(B→执行): 核心多头现在由事件OS(FinalEventScore)驱动, 不再是死因子book
-        # (alpha_scores)。21天再平衡, 用至多晚1天的 event_candidates 无影响。
+        # 三脑合一(B→执行): 核心多头由事件OS驱动。exec_score = FinalEventScore × 动量倾斜
+        # (前瞻对决证明"事件+动量">纯事件分)。21天再平衡, event_candidates 1天延迟无影响。
         "score_file":       "event_candidates.csv",
-        "score_col":        "FinalEventScore",
+        "score_col":        "exec_score",
         "capital_pct":      0.50,
         "position_cap":     0.10,
     },

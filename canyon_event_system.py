@@ -364,6 +364,25 @@ def run(pool_csv="event_pool.csv") -> pd.DataFrame:
             "note": (str(r.get("note", "")) + (f" ·{tilt_lbl}" if tilt_lbl else "")),
         })
     df = pd.DataFrame(rows).sort_values("FinalEventScore", ascending=False).reset_index(drop=True)
+    # 复活"动量"为活因子: 前瞻对决证明"事件+动量"最强 → 给执行分加动量倾斜。
+    # 动量单独在大盘是死的, 但作为事件选股的类内确认器是活的(forward-proven)。
+    df["momentum_63d"] = np.nan
+    df["exec_score"] = df["FinalEventScore"]
+    if prices is not None:
+        try:
+            px = prices[prices.index.notna()].sort_index().ffill()   # 丢掉NaT垃圾尾行 + 前向填充
+            last, prior = px.iloc[-1], px.iloc[-64] if len(px) > 64 else px.iloc[0]
+            mom = {}
+            for tk in df["ticker"].astype(str):
+                a, b = prior.get(tk), last.get(tk)
+                if pd.notna(a) and pd.notna(b) and a > 0:
+                    mom[tk] = float(b / a - 1)
+            df["momentum_63d"] = df["ticker"].astype(str).map(mom)
+            mp = df["momentum_63d"].rank(pct=True)              # 横截面动量百分位 0-1
+            # exec_score = 事件分 × (0.85 + 0.30×动量百分位): 高动量最多+15%, 低动量-15%
+            df["exec_score"] = (df["FinalEventScore"] * (0.85 + 0.30 * mp.fillna(0.5))).round(1)
+        except Exception:
+            pass
     df.to_csv(ROOT / "event_candidates.csv", index=False)
     return df
 
