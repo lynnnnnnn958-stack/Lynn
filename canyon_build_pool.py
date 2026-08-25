@@ -90,32 +90,46 @@ def forward_confirmation() -> dict:
     if not p.exists():
         return {}
     d = pd.read_csv(p)
-    # 真实内部人活动 (SEC EDGAR Form 4) — 补 alpha_scores 里那个恒为0的 sig_insider
-    edgar_ins = {}
-    ep = ROOT / "edgar_events.csv"
-    if ep.exists():
-        try:
-            e = pd.read_csv(ep)
-            for _, r in e.iterrows():
-                edgar_ins[str(r["ticker"])] = int(pd.to_numeric(r.get("insider_active", 0), errors="coerce") or 0)
-        except Exception:
-            pass
+    # 三脑合一(C→B): 内部人 *买入* 强度接进 C 因子。修了旧 bug —— 原来读 edgar_events
+    # 里不存在的 insider_active 列, 恒为0, 内部人对C的增强一直是死的。改用买入专属数据。
+    ins_buy = _insider_buy_strength()                    # {ticker: 0/1/2}
     out = {}
     for _, r in d.iterrows():
         tk = str(r.get("ticker", ""))
         rev = float(pd.to_numeric(r.get("sig_revision", 50), errors="coerce") or 50)
         sur = float(pd.to_numeric(r.get("sig_surprise", 50), errors="coerce") or 50)
         ins = float(pd.to_numeric(r.get("sig_insider", 50), errors="coerce") or 50)
-        # 各项 (pctl-50)/50 ∈ [-1,1]; 加权(上调0.5/超预期0.3/内部人0.2)
         z = ((rev - 50) / 50) * 0.5 + ((sur - 50) / 50) * 0.3 + ((ins - 50) / 50) * 0.2
-        insider_active = edgar_ins.get(tk, 0)
-        z += 0.12 * insider_active                       # EDGAR 真实内部人活跃 → 前瞻确认加分
+        buy = ins_buy.get(tk, 0.0)                        # 0=无买入, 1=有, 2=cluster/CEO大额
+        z += 0.15 * buy                                  # 真实内部人买入 → 前瞻确认(买入专属, 卖出不计)
         C = float(np.clip(1.5 + z * 2.5, 0, 4))
         drivers = []
         if rev >= 65: drivers.append("分析师上调")
         if sur >= 65: drivers.append("盈利超预期")
-        if ins >= 55 or insider_active: drivers.append("内部人买入")
+        if ins >= 55 or buy >= 1: drivers.append("内部人买入")
         out[tk] = (round(C, 1), "+".join(drivers) if drivers else "中性")
+    return out
+
+
+def _insider_buy_strength() -> dict:
+    """标普500 每票内部人 *买入* 强度 0/1/2, 来自真实 Form 4 开放市场买入(code P):
+    近90天有买入=1; cluster(≥2内部人) 或 CEO/CFO 大额=2。买入专属 —— 卖出不算利好。
+    源: largecap_form4_buys.csv(专职 S&P500 买入抓取, 随扫描补全覆盖)。"""
+    p = ROOT / "largecap_form4_buys.csv"
+    if not p.exists():
+        return {}
+    try:
+        b = pd.read_csv(p)
+        b["dt"] = pd.to_datetime(b["date"], errors="coerce")
+        b = b[b["dt"] >= pd.Timestamp.today() - pd.Timedelta(days=90)]
+    except Exception:
+        return {}
+    out = {}
+    for tk, g in b.groupby("ticker"):
+        owners = g["owner"].nunique() if "owner" in g.columns else len(g)
+        cxo = int(pd.to_numeric(g.get("role_cxo", 0), errors="coerce").fillna(0).max()) if "role_cxo" in g.columns else 0
+        val = pd.to_numeric(g.get("value", 0), errors="coerce").fillna(0).sum() if "value" in g.columns else 0
+        out[str(tk)] = 2.0 if (owners >= 2 or (cxo and val >= 100000)) else 1.0
     return out
 
 
