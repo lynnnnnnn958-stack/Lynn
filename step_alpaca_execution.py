@@ -74,8 +74,10 @@ BOOKS = {
     "SHORT": {
         "n_picks":          10,    # top 10 longs + bottom 10 shorts = 20 legs
         "rebalance_days":   5,
-        "score_file":       "ml_alpha_scores.csv",
-        "score_col":        "ml_short",
+        # 复活空头腿: ml_short(死ML) → short_book_score = exec_score, 但内部人集中卖出的票
+        # 重罚压到最底 → 被做空(验证过的真做空信号 t=2.6)。top=事件赢家做多, bottom=集中卖出做空。
+        "score_file":       "event_candidates.csv",
+        "score_col":        "short_book_score",
         "capital_pct":      0.20,
         "position_cap":     0.15,
         "earnings_filter":  True,

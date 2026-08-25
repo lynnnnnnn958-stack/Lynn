@@ -383,8 +383,35 @@ def run(pool_csv="event_pool.csv") -> pd.DataFrame:
             df["exec_score"] = (df["FinalEventScore"] * (0.85 + 0.30 * mp.fillna(0.5))).round(1)
         except Exception:
             pass
+    # 复活空头腿: short_book_score = exec_score, 但"内部人集中卖出"的票重罚, 压到最底 → 被做空。
+    # (SHORT sleeve 是 long-top/short-bottom, 底部=集中卖出的看空信号, 前瞻验证 t=2.6)
+    cl_sell = _cluster_sell_set()
+    df["insider_cluster_sell"] = df["ticker"].astype(str).isin(cl_sell)
+    df["short_book_score"] = df["exec_score"] - df["insider_cluster_sell"].astype(float) * 500.0
     df.to_csv(ROOT / "event_candidates.csv", index=False)
     return df
+
+
+def _cluster_sell_set():
+    """标普500 近90天内部人 *集中卖出*(≥2内部人30天内同抛)的票集合 → 做空候选。
+    源 largecap_form4_sells.csv(专职S&P500卖出抓取)。无数据则空集(优雅降级)。"""
+    p = ROOT / "largecap_form4_sells.csv"
+    if not p.exists():
+        return set()
+    try:
+        s = pd.read_csv(p)
+        s["dt"] = pd.to_datetime(s["date"], errors="coerce")
+        s = s[s["dt"] >= pd.Timestamp.today() - pd.Timedelta(days=90)]
+    except Exception:
+        return set()
+    out = set()
+    for tk, g in s.groupby("ticker"):
+        g = g.sort_values("dt")
+        for _, r in g.iterrows():
+            w = g[(g["dt"] > r["dt"] - pd.Timedelta(days=30)) & (g["dt"] <= r["dt"])]
+            if ("owner" in w.columns and w["owner"].nunique() >= 2):
+                out.add(str(tk)); break
+    return out
 
 
 def main():
