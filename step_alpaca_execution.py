@@ -93,8 +93,10 @@ BOOKS = {
     "LONG": {
         "n_picks":          20,
         "rebalance_days":   21,
-        "score_file":       "alpha_scores.csv",
-        "score_col":        "alpha_score",
+        # 三脑合一(B→执行): 核心多头现在由事件OS(FinalEventScore)驱动, 不再是死因子book
+        # (alpha_scores)。21天再平衡, 用至多晚1天的 event_candidates 无影响。
+        "score_file":       "event_candidates.csv",
+        "score_col":        "FinalEventScore",
         "capital_pct":      0.50,
         "position_cap":     0.10,
     },
